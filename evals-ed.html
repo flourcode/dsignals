@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ed evals</title>
+<style>
+  :root {
+    --bg: #0f1014;
+    --surface: #181a22;
+    --surface-elev: #20232e;
+    --border: #2a2d3a;
+    --text: #e8e9ed;
+    --text-muted: #9498a5;
+    --text-faint: #6b6e7a;
+    --accent: #5eead4;
+    --pass: #4ade80;
+    --warn: #fbbf24;
+    --fail: #f87171;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, sans-serif; padding: 20px;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p.intro { color: var(--text-muted); font-size: 13px; max-width: 700px; }
+  .toolbar { margin: 16px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    background: var(--accent); color: var(--bg); border: none;
+    border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary { background: var(--surface-elev); color: var(--text); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input.endpoint {
+    flex: 1; min-width: 320px;
+    background: var(--surface-elev); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px;
+    font: inherit; font-family: var(--mono); font-size: 12px;
+  }
+  .summary {
+    margin: 16px 0; padding: 12px 16px;
+    background: var(--surface); border-radius: 8px;
+    font-family: var(--mono); font-size: 13px;
+    display: flex; gap: 20px; flex-wrap: wrap;
+  }
+  .summary span.pass { color: var(--pass); }
+  .summary span.warn { color: var(--warn); }
+  .summary span.fail { color: var(--fail); }
+
+  .scenario {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+  }
+  .scenario-header {
+    padding: 12px 16px; display: flex; align-items: center; gap: 12px;
+    cursor: pointer;
+  }
+  .scenario-header:hover { background: rgba(255,255,255,0.02); }
+  .badge {
+    width: 10px; height: 10px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .badge.pass { background: var(--pass); }
+  .badge.warn { background: var(--warn); }
+  .badge.fail { background: var(--fail); }
+  .badge.pending { background: var(--text-faint); }
+  .badge.running { background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  .scenario-title { font-weight: 600; flex: 1; }
+  .scenario-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+  .scenario-body {
+    padding: 0 16px 12px; display: none;
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+  }
+  .scenario.expanded .scenario-body { display: block; }
+  .scenario-desc {
+    color: var(--text-muted); font-size: 13px; padding: 12px 0;
+  }
+
+  .turn { margin: 12px 0; padding: 10px 12px; background: var(--surface-elev); border-radius: 6px; }
+  .turn-q {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .turn-q::before { content: '▸ '; color: var(--text-faint); }
+  .turn-meta { font-family: var(--mono); font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+  .assertion { font-size: 12px; padding: 4px 0; padding-left: 22px; position: relative; }
+  .assertion::before {
+    position: absolute; left: 0; width: 16px; text-align: center;
+    font-weight: 700;
+  }
+  .assertion.pass::before { content: '✓'; color: var(--pass); }
+  .assertion.fail::before { content: '✗'; color: var(--fail); }
+  .assertion .kind { font-family: var(--mono); font-size: 10px; color: var(--text-faint); margin-right: 6px; }
+  .snapshot {
+    margin-top: 8px; font-family: var(--mono); font-size: 11px;
+    background: #000; color: #7aa2f7; padding: 8px 10px; border-radius: 4px;
+    white-space: pre-wrap; max-height: 320px; overflow: auto;
+  }
+  .snapshot-toggle {
+    font-size: 11px; color: var(--text-faint); cursor: pointer;
+    padding: 4px 0; user-select: none;
+  }
+  .snapshot-toggle:hover { color: var(--accent); }
+  .turn-fatal {
+    color: var(--fail); font-family: var(--mono); font-size: 12px;
+    background: rgba(248,113,113,0.1); padding: 8px; border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<h1>Ed eval suite</h1>
+<p class="intro">Persona-driven scenarios for SEC EDGAR / Form D queries. Runs each user message through Ed's real pipeline (fetcher.js + deployed Lambda), checks assertions. Hard fail = product bug. Soft fail = LLM nondeterminism, usually safe.</p>
+
+<div class="toolbar">
+  <button id="runAll">Run all</button>
+  <button id="clearResults" class="secondary">Clear</button>
+  <input class="endpoint" id="endpoint" placeholder="Lambda Function URL (e.g. https://xxx.lambda-url.us-east-1.on.aws/)">
+</div>
+
+<div class="summary" id="summary">Idle.</div>
+
+<div id="scenarios"></div>
+
+<script type="module">
+  import { EVAL_SCENARIOS } from './eval-scenarios-ed.js';
+  import { fetchEdgar, summarizePayloadForEd } from './fetcher.js';
+
+  // <data /> tag detection (mirrors stream-client logic)
+  const DATA_TAG_RE = /<data\s+([^>]+?)\/>|<data\s+([^>]*?)><\/data>/i;
+  const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
+
+  function findDataTag(text) {
+    const m = DATA_TAG_RE.exec(text);
+    if (!m) {
+      const partialIdx = text.lastIndexOf('<data');
+      if (partialIdx >= 0) {
+        const tail = text.slice(partialIdx);
+        if (!/\/>/.test(tail) && !/<\/data>/i.test(tail)) {
+          return { pending: true, partialIndex: partialIdx };
+        }
+      }
+      return null;
+    }
+    const attrText = m[1] || m[2] || '';
+    const attrs = {};
+    for (const [, k, v] of attrText.matchAll(ATTR_RE)) attrs[k] = v;
+    return { match: m[0], attrs, index: m.index, length: m[0].length };
+  }
+
+  function stripDataTags(text) {
+    if (!text) return '';
+    return text.replace(/<data\b[^>]*\/>/gi, '').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  // Run one turn against Ed's real pipeline. Returns the same shape Ed's
+  // ask() would have, so eval assertions can inspect it.
+  async function runOneTurn(question, history, endpoint) {
+    let dataTagSeen = false;
+    let preTagText = '';
+    let tagAttrs = null;
+    const abort = new AbortController();
+    const fullHistory = [...history, { role: 'user', content: question }];
+
+    let firstPassFull = '';
+    try {
+      firstPassFull = await streamEdStream({
+        endpoint,
+        history: fullHistory,
+        activeCardSummary: null,
+        payloadSummary: null,
+        abortController: abort,
+        onChunk: (acc) => {
+          if (dataTagSeen) return;
+          const tagInfo = findDataTag(acc);
+          if (tagInfo && !tagInfo.pending) {
+            dataTagSeen = true;
+            preTagText = acc.slice(0, tagInfo.index).trim();
+            tagAttrs = tagInfo.attrs;
+            abort.abort();
+          }
+        },
+      });
+    } catch (err) {
+      if (!(dataTagSeen && err.name === 'AbortError')) {
+        return { mode: 'error', error: err.message };
+      }
+    }
+
+    if (!dataTagSeen) {
+      return {
+        mode: 'prose',
+        tagAttrs: null,
+        preTagText: firstPassFull,
+        postTagText: '',
+        rowCount: 0,
+        rows: [],
+      };
+    }
+
+    // Data pull
+    let result;
+    try {
+      result = await fetchEdgar(tagAttrs, endpoint);
+    } catch (err) {
+      return {
+        mode: 'error',
+        tagAttrs,
+        preTagText,
+        error: err.message,
+      };
+    }
+
+    // Second pass
+    const summary = summarizePayloadForEd(result, tagAttrs);
+    const historyForSecond = [
+      ...fullHistory,
+      { role: 'model', content: preTagText + '\n\n[data pulled; see card]' },
+    ];
+
+    let secondPassFull = '';
+    try {
+      const secondAbort = new AbortController();
+      secondPassFull = await streamEdStream({
+        endpoint,
+        history: historyForSecond,
+        activeCardSummary: null,
+        payloadSummary: summary,
+        abortController: secondAbort,
+        onChunk: () => {},
+      });
+    } catch (err) {
+      // non-fatal — we already have the card data
+    }
+
+    return {
+      mode: 'data',
+      tagAttrs,
+      preTagText,
+      postTagText: stripDataTags(secondPassFull),
+      rowCount: result.rows.length,
+      total: result.total,
+      rows: result.rows,
+      meta: result.meta,
+    };
+  }
+
+  async function streamEdStream({ endpoint, history, activeCardSummary, payloadSummary, abortController, onChunk }) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_type: 'ed_stream',
+        history,
+        active_card_summary: activeCardSummary || null,
+        payload_summary: payloadSummary || null,
+      }),
+      signal: abortController?.signal,
+    });
+    if (!res.ok) throw new Error(`stream ${res.status}`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', accumulated = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        try {
+          const msg = JSON.parse(raw);
+          if (msg.t === 'chunk' && msg.text) {
+            accumulated += msg.text;
+            onChunk(accumulated);
+          } else if (msg.t === 'done') return accumulated;
+          else if (msg.t === 'error') throw new Error(msg.msg || 'stream error');
+        } catch (e) { if (e.message?.includes('stream')) throw e; }
+      }
+    }
+    return accumulated;
+  }
+
+  // ─── UI ───────────────────────────────────────────────────────────
+
+  const scenariosEl = document.getElementById('scenarios');
+  const summaryEl = document.getElementById('summary');
+  const endpointEl = document.getElementById('endpoint');
+
+  // Restore endpoint from URL or localStorage
+  const params = new URLSearchParams(window.location.search);
+  endpointEl.value = params.get('endpoint') || localStorage.getItem('ed_eval_endpoint') || '';
+  endpointEl.addEventListener('change', () => {
+    localStorage.setItem('ed_eval_endpoint', endpointEl.value.trim());
+  });
+
+  function renderScenario(scenario, idx) {
+    const el = document.createElement('div');
+    el.className = 'scenario';
+    el.id = `scenario-${idx}`;
+    el.innerHTML = `
+      <div class="scenario-header">
+        <div class="badge pending" data-role="badge"></div>
+        <div class="scenario-title">${scenario.name}</div>
+        <div class="scenario-meta" data-role="meta">— turns: ${scenario.turns.length}</div>
+      </div>
+      <div class="scenario-body">
+        <div class="scenario-desc">${scenario.description}</div>
+        <div data-role="turns"></div>
+      </div>
+    `;
+    el.querySelector('.scenario-header').addEventListener('click', () => {
+      el.classList.toggle('expanded');
+    });
+    return el;
+  }
+
+  function renderScenarios() {
+    scenariosEl.innerHTML = '';
+    EVAL_SCENARIOS.forEach((sc, i) => scenariosEl.appendChild(renderScenario(sc, i)));
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+
+  function renderTurn(scenarioEl, turn, result, assertions, durationMs) {
+    const turnsEl = scenarioEl.querySelector('[data-role="turns"]');
+    const t = document.createElement('div');
+    t.className = 'turn';
+    const totalAsserts = assertions.length;
+    const passed = assertions.filter(a => a.pass).length;
+    const failedHard = assertions.filter(a => !a.pass && a.kind === 'hard').length;
+    t.innerHTML = `
+      <div class="turn-q">${escapeHtml(turn.question)}</div>
+      <div class="turn-meta">
+        ${result.mode || 'unknown'} · ${durationMs}ms · ${result.rowCount || 0} rows · ${passed}/${totalAsserts} asserts
+      </div>
+      ${assertions.map(a => `
+        <div class="assertion ${a.pass ? 'pass' : 'fail'}">
+          <span class="kind">${a.kind}</span> ${escapeHtml(a.label)}
+        </div>
+      `).join('')}
+      <div class="snapshot-toggle" data-role="snap-toggle">▸ Show snapshot</div>
+      <div class="snapshot" data-role="snap" style="display:none">${escapeHtml(JSON.stringify({
+        mode: result.mode,
+        tagAttrs: result.tagAttrs,
+        rowCount: result.rowCount,
+        total: result.total,
+        preTagText: (result.preTagText || '').slice(0, 500),
+        postTagText: (result.postTagText || '').slice(0, 500),
+        error: result.error,
+        meta: result.meta,
+      }, null, 2))}</div>
+    `;
+    t.querySelector('[data-role="snap-toggle"]').addEventListener('click', e => {
+      const snap = t.querySelector('[data-role="snap"]');
+      const showing = snap.style.display !== 'none';
+      snap.style.display = showing ? 'none' : 'block';
+      e.target.textContent = showing ? '▸ Show snapshot' : '▾ Hide snapshot';
+    });
+    turnsEl.appendChild(t);
+    return { failedHard };
+  }
+
+  function setBadge(scenarioEl, status) {
+    const b = scenarioEl.querySelector('[data-role="badge"]');
+    b.className = 'badge ' + status;
+  }
+
+  async function runScenario(scenario, idx, endpoint) {
+    const el = document.getElementById(`scenario-${idx}`);
+    el.classList.add('expanded');
+    setBadge(el, 'running');
+    el.querySelector('[data-role="turns"]').innerHTML = '';
+
+    const history = [];
+    let allHardPass = true;
+    let anySoftFail = false;
+
+    for (const turn of scenario.turns) {
+      const t0 = Date.now();
+      let result;
+      try {
+        result = await runOneTurn(turn.question, history, endpoint);
+      } catch (err) {
+        result = { mode: 'error', error: err.message };
+      }
+      const durationMs = Date.now() - t0;
+
+      // Add user + model to history for next turn
+      history.push({ role: 'user', content: turn.question });
+      const modelContent = (result.preTagText || '') + (result.postTagText ? '\n\n' + result.postTagText : '');
+      if (modelContent.trim()) history.push({ role: 'model', content: modelContent });
+
+      // Run assertions
+      const assertions = (turn.assert || []).map(a => {
+        let passed = false;
+        try { passed = !!a.check(result); } catch { passed = false; }
+        return { kind: a.type || 'hard', label: a.label, pass: passed };
+      });
+
+      assertions.forEach(a => {
+        if (!a.pass && a.kind === 'hard') allHardPass = false;
+        if (!a.pass && a.kind === 'soft') anySoftFail = true;
+      });
+
+      renderTurn(el, turn, result, assertions, durationMs);
+    }
+
+    const status = !allHardPass ? 'fail' : (anySoftFail ? 'warn' : 'pass');
+    setBadge(el, status);
+    return status;
+  }
+
+  async function runAll() {
+    const endpoint = endpointEl.value.trim();
+    if (!endpoint) {
+      alert('Set the Lambda Function URL first.');
+      return;
+    }
+    document.getElementById('runAll').disabled = true;
+    summaryEl.innerHTML = 'Running…';
+    const results = { pass: 0, warn: 0, fail: 0 };
+    const t0 = Date.now();
+    for (let i = 0; i < EVAL_SCENARIOS.length; i++) {
+      const status = await runScenario(EVAL_SCENARIOS[i], i, endpoint);
+      results[status]++;
+      summaryEl.innerHTML = `
+        <span class="pass">${results.pass} passed</span>
+        <span class="warn">${results.warn} warning</span>
+        <span class="fail">${results.fail} failed</span>
+        <span>${i + 1}/${EVAL_SCENARIOS.length} scenarios</span>
+        <span>${((Date.now() - t0) / 1000).toFixed(1)}s elapsed</span>
+      `;
+    }
+    document.getElementById('runAll').disabled = false;
+  }
+
+  document.getElementById('runAll').addEventListener('click', runAll);
+  document.getElementById('clearResults').addEventListener('click', () => {
+    EVAL_SCENARIOS.forEach((_, i) => {
+      const el = document.getElementById(`scenario-${i}`);
+      if (el) {
+        setBadge(el, 'pending');
+        el.querySelector('[data-role="turns"]').innerHTML = '';
+        el.classList.remove('expanded');
+      }
+    });
+    summaryEl.textContent = 'Idle.';
+  });
+
+  renderScenarios();
+</script>
+</body>
+</html>
