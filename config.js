@@ -30,13 +30,13 @@ export default {
   // ---- The human behind Mo ----
   meetWith: {
     name: 'Mark',
-    url: 'https://calendly.com/example',
+    url: 'https://calendly.com/markflournoy/chat-with-mark',
     blurb: 'Feedback or questions about Mo?',
   },
 
   // ---- API Endpoint ----
   // Set this AFTER you create your Lambda Function URL.
-  apiEndpoint: '',
+  apiEndpoint: 'https://4yjfpnei2qnulzfcyrunh564qy0mxptv.lambda-url.us-east-1.on.aws/',
 
   // ---- Theme ----
   theme: {
