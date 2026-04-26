@@ -1,24 +1,25 @@
 // ============================================================================
-// card-renderer.js — SEC EDGAR card layouts (matching fedmo visual language)
+// card-renderer.js — SEC EDGAR cards (Jobs/Lupton restraint version)
 // ============================================================================
 //
-// Three card kinds:
-//   1. company_filings  — single-company filing history
-//                          With SPV trail mode for grouped filer families
-//   2. filings_list     — sector / form / date search results
-//   3. no_data          — empty state
+// Design philosophy:
+//   - ONE finding per card. The headline does the work.
+//   - Bar charts show proportionality. The eye gets the answer in 1 second.
+//   - No filter chips, no stat blocks, no decorative pills.
+//   - Every row links directly to its EDGAR filing.
+//   - Cards build TRUST, not visual interest.
 //
-// Visual language follows fedmo:
-//   - No tinted backgrounds inside cards
-//   - No left-border decoration on group blocks
-//   - No badge pills on form types
-//   - Hierarchy through typography weight and white space
-//   - Rows separated by hairline border-bottom only
-//   - Group headers use the .mo-comp-head pattern (title left, meta right)
+// Card kinds:
+//   1. company_filings (SPV trail mode)  → headline + bar chart + insight + link out
+//   2. company_filings (flat mode)       → headline + clean row list + link out
+//   3. filings_list (sector search)      → same as flat mode but with sector subtitle
+//   4. no_data                           → calm honest message
 // ============================================================================
 
 (function () {
   'use strict';
+
+  // ── helpers ───────────────────────────────────────────────────────────────
 
   const escapeHtml = (s) =>
     String(s ?? '')
@@ -68,6 +69,23 @@
     return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
   };
 
+  const fmtDateShort = (d) => {
+    if (!d) return '';
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return d;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${months[date.getMonth()]} ${date.getDate()}`;
+  };
+
+  // EDGAR company-filings page: gives the user the canonical "all filings" view
+  const buildCompanyFilingsUrl = (cik) => {
+    if (!cik) return null;
+    const cikInt = parseInt(cik, 10);
+    return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cikInt}&type=&dateb=&owner=include&count=40`;
+  };
+
+  // ── public entry ──────────────────────────────────────────────────────────
+
   function render(card) {
     if (!card) return renderError('No card data');
     switch (card.kind) {
@@ -78,7 +96,7 @@
     }
   }
 
-  // ── Company filings ───────────────────────────────────────────────────────
+  // ── company filings ───────────────────────────────────────────────────────
 
   function renderCompanyFilings(card) {
     if (card.is_spv_trail && card.groups && card.groups.length > 0) {
@@ -87,185 +105,178 @@
     return renderFlatFilings(card);
   }
 
-  // SPV trail: stat row at top + grouped filer families below
-  // Matches fedmo's mo-stat-row + mo-comp-head + mo-list rhythm
+  // ── SPV trail: the killer demo ────────────────────────────────────────────
+  // ONE finding per card. Bar chart shows dominance instantly.
   function renderSpvTrail(card) {
     const company = card.company || 'Company';
     const total = card.total || card.shown || 0;
-    const groupCount = card.groups.length;
 
-    // Compute aggregate stats for the top row
-    let totalAmount = 0;
-    let earliestDate = null;
-    let latestDate = null;
-    for (const g of card.groups) {
-      if (g.total_amount) totalAmount += g.total_amount;
-      if (!earliestDate || (g.first_filed && g.first_filed < earliestDate)) earliestDate = g.first_filed;
-      if (!latestDate || (g.latest_filed && g.latest_filed > latestDate)) latestDate = g.latest_filed;
+    // Filter to the form-type subtitle line based on actual data
+    const formType = card.filters?.form_type;
+    const dateAfter = card.filters?.date_after;
+    const dateBefore = card.filters?.date_before;
+    const subtitleParts = [];
+    subtitleParts.push(`${total} ${formType ? 'Form ' + formType + ' filing' : 'SPV filing'}${total === 1 ? '' : 's'}`);
+    if (dateAfter && dateBefore) {
+      subtitleParts.push(`${fmtDateShort(dateAfter)} – ${fmtDate(dateBefore)}`);
+    } else if (dateAfter) {
+      subtitleParts.push(`since ${fmtDate(dateAfter)}`);
+    } else if (dateBefore) {
+      subtitleParts.push(`through ${fmtDate(dateBefore)}`);
     }
 
-    const dateSpan = earliestDate && latestDate
-      ? (earliestDate === latestDate ? fmtDate(latestDate) : `${fmtDate(earliestDate).split(',')[0]} → ${fmtDate(latestDate)}`)
-      : '';
+    // Bar chart: families sorted by count, widths proportional to max
+    const groups = card.groups.slice(0, 8); // top 8 max for readability
+    const maxCount = Math.max(...groups.map(g => g.count));
 
-    // Stats row: total filings, filer families, aggregate amount
-    const statsHtml = `
-      <div class="mo-stat-row">
-        <div class="mo-stat">
-          <div class="mo-stat-value">${total.toLocaleString()}</div>
-          <div class="mo-stat-label">Filings</div>
-        </div>
-        <div class="mo-stat">
-          <div class="mo-stat-value">${groupCount.toLocaleString()}</div>
-          <div class="mo-stat-label">Filer families</div>
-        </div>
-        ${totalAmount > 0 ? `
-        <div class="mo-stat">
-          <div class="mo-stat-value">${escapeHtml(fmtMoney(totalAmount))}</div>
-          <div class="mo-stat-label">Aggregate</div>
-        </div>` : ''}
-      </div>
-    `;
-
-    // Each group rendered as comp-head + sample rows (top 1-2 from the group)
-    // Top filers get a list. Smaller filers collapse to a name-only row.
-    const groupsHtml = card.groups.map(g => {
-      const totalAmt = g.total_amount > 0 ? fmtMoney(g.total_amount) : null;
-      const meta = [
-        `${g.count} filing${g.count === 1 ? '' : 's'}`,
-        totalAmt,
-      ].filter(Boolean).join(' · ');
-
-      const dateRange = g.first_filed && g.latest_filed && g.first_filed !== g.latest_filed
-        ? `${fmtDate(g.first_filed).split(',')[0]} → ${fmtDate(g.latest_filed)}`
-        : fmtDate(g.latest_filed);
-
-      const formsList = (g.forms || []).slice(0, 4).join(', ');
-
+    const barsHtml = groups.map(g => {
+      const pct = (g.count / maxCount) * 100;
+      const totalAmtStr = g.total_amount > 0 ? fmtMoney(g.total_amount) : '';
       return html`
-        <div class="mo-comp-head">
-          <div class="mo-comp-title">${g.family_name}</div>
-          <div class="mo-comp-meta">${meta}</div>
-        </div>
-        <div class="mo-row" style="border-bottom: none; padding-top: 0;">
-          <div class="mo-row-name" style="color: var(--text-faint); font-size: 13px;">
-            ${formsList} · ${dateRange}
+        <div class="sec-bar-row">
+          <div class="sec-bar-label">${g.family_name}</div>
+          <div class="sec-bar-track">
+            <div class="sec-bar-fill" style="width: ${pct}%"></div>
           </div>
+          <div class="sec-bar-count">${g.count}</div>
         </div>
       `;
     }).join('');
 
+    // Insight line: the headline finding from the data
+    const dominantPct = Math.round((groups[0].count / total) * 100);
+    const dominantName = groups[0].family_name;
+    const latestDate = groups[0].latest_filed;
+    let insight;
+    if (dominantPct >= 60) {
+      insight = `${dominantName} filed ${dominantPct}% of all filings.`;
+    } else if (dominantPct >= 40) {
+      insight = `${dominantName} ran the largest share at ${dominantPct}%.`;
+    } else {
+      insight = `Activity spread across ${groups.length} filer families.`;
+    }
+    if (latestDate) {
+      insight += ` Most recent: ${fmtDate(latestDate)}.`;
+    }
+
+    // Link out: company filings page on EDGAR
+    const cikForLink = card.rows?.[0]?.cik;
+    const allFilingsUrl = buildCompanyFilingsUrl(cikForLink);
+
     return fromHtml(html`
       <div class="sec-card">
-        <div class="card-title">${company}</div>
-        <div class="card-subtitle">SPV trail · SEC EDGAR full-text search</div>
-        ${safe(statsHtml)}
-        ${safe(groupsHtml)}
-        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ filings (search capped)` : (total > card.shown ? `Top ${card.shown} of ${total}` : `All ${total} filings`)}</div>
+        <h3 class="sec-headline">${company}</h3>
+        <div class="sec-subhead">${subtitleParts.join(' · ')}</div>
+
+        <div class="sec-bars">${safe(barsHtml)}</div>
+
+        <div class="sec-insight">${insight}</div>
+
+        ${safe(allFilingsUrl ? `<a href="${escapeHtml(allFilingsUrl)}" target="_blank" rel="noopener" class="sec-link-out">View all ${total} filings on EDGAR →</a>` : '')}
       </div>
     `);
   }
 
-  // Flat filings list — single company, simple rows
+  // ── Flat filings: clean row list, every row links ─────────────────────────
   function renderFlatFilings(card) {
     const company = card.company || 'Company';
     const total = card.total || card.shown || 0;
     const rows = card.rows || [];
 
-    const filterLine = buildFilterLine(card.filters);
+    const formType = card.filters?.form_type;
+    const dateAfter = card.filters?.date_after;
+    const dateBefore = card.filters?.date_before;
 
-    const rowsHtml = rows.slice(0, 30).map(r => {
+    const subtitleParts = [];
+    subtitleParts.push(`${total} ${formType ? 'Form ' + formType + ' filing' : 'filing'}${total === 1 ? '' : 's'}`);
+    if (dateAfter && dateBefore) {
+      subtitleParts.push(`${fmtDateShort(dateAfter)} – ${fmtDate(dateBefore)}`);
+    } else if (dateAfter) {
+      subtitleParts.push(`since ${fmtDate(dateAfter)}`);
+    } else if (dateBefore) {
+      subtitleParts.push(`through ${fmtDate(dateBefore)}`);
+    }
+
+    // Row list: date — form — link
+    const rowsHtml = rows.slice(0, 12).map(r => {
       const amtText = r.amount ? fmtMoney(r.amount) : '';
-      const metaLine = [
-        r.form_type,
-        fmtDate(r.filed_date),
-        r.state_of_inc,
-      ].filter(Boolean).join(' · ');
-
       return html`
-        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="mo-row-2line">
-          <div class="mo-row-2line-top">
-            <div class="mo-row-name">${r.filer_name || ''}</div>
-            ${amtText ? `<div class="mo-row-amount">${escapeHtml(amtText)}</div>` : ''}
-          </div>
-          <div class="mo-row-2line-meta">${metaLine}</div>
+        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row">
+          <span class="sec-row-date">${fmtDate(r.filed_date)}</span>
+          <span class="sec-row-form">${r.form_type || '?'}</span>
+          ${amtText ? `<span class="sec-row-amount">${escapeHtml(amtText)}</span>` : ''}
+          <span class="sec-row-arrow">→</span>
         </a>
       `;
     }).join('');
 
+    const remaining = total - Math.min(rows.length, 12);
+    const cikForLink = card.rows?.[0]?.cik;
+    const allFilingsUrl = buildCompanyFilingsUrl(cikForLink);
+
     return fromHtml(html`
       <div class="sec-card">
-        <div class="card-title">${company}</div>
-        <div class="card-subtitle">${card.total_capped ? `${total}+` : total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
-        <div class="mo-list">${safe(rowsHtml)}</div>
-        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ matches (search capped)` : (rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`)}</div>
+        <h3 class="sec-headline">${company}</h3>
+        <div class="sec-subhead">${subtitleParts.join(' · ')}</div>
+
+        <div class="sec-rows">${safe(rowsHtml)}</div>
+
+        ${safe(remaining > 0 && allFilingsUrl
+          ? `<a href="${escapeHtml(allFilingsUrl)}" target="_blank" rel="noopener" class="sec-link-out">View all ${total} filings on EDGAR →</a>`
+          : '')}
       </div>
     `);
   }
 
   // ── Filings list (sector / search results) ────────────────────────────────
-
   function renderFilingsList(card) {
     const summary = card.query_summary || 'Filings';
     const total = card.total || card.shown || 0;
     const rows = card.rows || [];
 
-    const filterLine = buildFilterLine(card.filters);
+    const totalDisplay = card.total_capped ? `${total}+` : `${total}`;
 
-    const rowsHtml = rows.slice(0, 30).map(r => {
+    const rowsHtml = rows.slice(0, 12).map(r => {
       const amtText = r.amount ? fmtMoney(r.amount) : '';
-      const metaLine = [
-        r.form_type,
-        fmtDate(r.filed_date),
-        r.state_of_inc,
-      ].filter(Boolean).join(' · ');
-
       return html`
-        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="mo-row-2line">
-          <div class="mo-row-2line-top">
-            <div class="mo-row-name">${r.filer_name || 'Unknown filer'}</div>
-            ${amtText ? `<div class="mo-row-amount">${escapeHtml(amtText)}</div>` : ''}
+        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row sec-row-tall">
+          <div class="sec-row-main">
+            <div class="sec-row-filer">${r.filer_name || 'Unknown filer'}</div>
+            <div class="sec-row-meta">
+              ${fmtDate(r.filed_date)} · ${escapeHtml(r.form_type || '?')}${r.state_of_inc ? ' · ' + escapeHtml(r.state_of_inc) : ''}
+            </div>
           </div>
-          <div class="mo-row-2line-meta">${metaLine}</div>
+          ${amtText ? `<span class="sec-row-amount">${escapeHtml(amtText)}</span>` : ''}
+          <span class="sec-row-arrow">→</span>
         </a>
       `;
     }).join('');
 
     return fromHtml(html`
       <div class="sec-card">
-        <div class="card-title">${summary}</div>
-        <div class="card-subtitle">${card.total_capped ? `${total}+` : total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
-        <div class="mo-list">${safe(rowsHtml)}</div>
-        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ matches (search capped)` : (rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`)}</div>
+        <h3 class="sec-headline">${summary}</h3>
+        <div class="sec-subhead">${totalDisplay} filing${total === 1 ? '' : 's'}${card.total_capped ? ' (search capped)' : ''}</div>
+
+        <div class="sec-rows">${safe(rowsHtml)}</div>
+
+        ${safe(rows.length > 12 ? `<div class="sec-foot-note">Top 12 of ${totalDisplay} shown</div>` : '')}
       </div>
     `);
   }
 
-  function buildFilterLine(filters) {
-    if (!filters) return '';
-    const chips = [];
-    if (filters.sector?.display) chips.push(filters.sector.display);
-    if (filters.form_type) chips.push(`Form ${filters.form_type}`);
-    if (filters.min_amount) chips.push(`≥ $${(filters.min_amount / 1_000_000).toFixed(0)}M`);
-    if (filters.state) chips.push(filters.state);
-    if (filters.date_after && filters.date_before) chips.push(`${filters.date_after} to ${filters.date_before}`);
-    else if (filters.date_after) chips.push(`since ${filters.date_after}`);
-    else if (filters.date_before) chips.push(`through ${filters.date_before}`);
-    return chips.join(' · ');
-  }
-
-  // ── No data ───────────────────────────────────────────────────────────────
-
+  // ── No data: calm, honest, useful ─────────────────────────────────────────
   function renderNoData(card) {
     return fromHtml(html`
-      <div class="card-no-data">
-        <div class="card-no-data-message">${card.message || 'No matches for that query.'}</div>
+      <div class="sec-card sec-card-empty">
+        <div class="sec-empty-headline">Nothing matched.</div>
+        ${safe(card.query_summary ? `<div class="sec-empty-query">${escapeHtml(card.query_summary)}</div>` : '')}
+        <div class="sec-empty-message">${escapeHtml(card.message || 'No matches for that query.')}</div>
       </div>
     `);
   }
 
   function renderError(msg) {
-    return fromHtml(html`<div class="mo-error">${msg}</div>`);
+    return fromHtml(html`<div class="mo-error">${escapeHtml(msg)}</div>`);
   }
 
   window.CardRenderer = { render };

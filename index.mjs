@@ -237,6 +237,10 @@ NEVER
 
 NEVER fabricate filings, amounts, or dates. Everything you state must be either (a) on the card the tool just rendered, or (b) general SEC/finance knowledge ("a Form D means..."). If you're about to cite a specific number and you didn't see it in the card, stop.
 
+NEVER claim to have read a filing's actual content. The card shows you metadata only — filer, form type, date, accession number. It does NOT show you the text inside the 10-K, 10-Q, S-1, or any other filing. You cannot quote risk factors, MD&A passages, specific dollar figures from financial statements, or any prose written inside a filing. If a user asks "what does Salesforce's 10-K say about AI risks," you can confirm the filing exists and link to it, but you must say honestly: "I can show you the filing exists. I can't read what's inside. The 2026 10-K is at the link — Item 1A Risk Factors is where their risk language lives."
+
+NEVER compare the contents of two filings against each other if the card only shows their metadata. Do not say "the 2026 filing emphasizes X more than the 2024 version" unless that comparison is visible on the card itself.
+
 NEVER emit a \`<data />\` tag in your SECOND-pass response (when interpreting a card). Pure prose only.
 
 NEVER name specific investors or LPs from Form Ds — the data doesn't include them.
@@ -1132,9 +1136,12 @@ async function fetchPrivateCompanyFilings({ companyName, companyAlias, formType,
     };
   }
 
-  // SPV trail mode: Always group for known-private companies if there are
-  // 5+ filings (because the whole point is the SPV trail, even with a small set)
-  const groups = rows.length >= 5 ? groupByFilerFamily(rows) : null;
+  // SPV trail mode: only fire if filings genuinely look like SPVs
+  // (Form Ds from entities with company name in the filer name).
+  // Otherwise it's a regular filings list — even for known-private companies,
+  // the data might just be mutual fund holdings disclosures, not SPVs.
+  const isSpvTrail = isGenuineSpvTrail(rows, companyName);
+  const groups = isSpvTrail ? groupByFilerFamily(rows, companyName) : null;
   const totalRaw = data?.hits?.total?.value || rows.length;
   const total = totalRaw >= 10000 ? rows.length : Math.min(totalRaw, rows.length);
 
@@ -1152,7 +1159,7 @@ async function fetchPrivateCompanyFilings({ companyName, companyAlias, formType,
       },
       rows,
       groups,
-      is_spv_trail: !!groups,
+      is_spv_trail: isSpvTrail,
     },
   };
 }
@@ -1218,19 +1225,11 @@ async function fetchUnknownCompanyFilings({ companyName, formType, dateAfter, da
     };
   }
 
-  // Smart SPV detection — only fire if the named entity isn't dominant in top filers
-  const topFilerName = rows[0]?.filer_name?.toLowerCase() || '';
-  const namedEntityIsTopFiler = topFilerName.includes(lowerCompany);
-  const uniqueFilers = new Set(rows.map(r => r.filer_name)).size;
-
-  // SPV trail only if: 10+ filings, 5+ unique filers, AND the named company
-  // isn't the dominant filer (which would mean they ARE filing themselves)
-  const isSpvTrail = rows.length >= 10 && uniqueFilers >= 5 && !namedEntityIsTopFiler;
-
-  let groups = null;
-  if (isSpvTrail) {
-    groups = groupByFilerFamily(rows);
-  }
+  // SPV trail mode: strict gate — only fire if filings genuinely look like SPVs
+  // (Form Ds from entities whose name contains the company). This prevents
+  // misidentifying mutual fund disclosures or public-company 8-Ks as SPVs.
+  const isSpvTrail = isGenuineSpvTrail(rows, companyName);
+  const groups = isSpvTrail ? groupByFilerFamily(rows, companyName) : null;
 
   const totalRaw = data?.hits?.total?.value || rows.length;
   const total = totalRaw >= 10000 ? rows.length : Math.min(totalRaw, rows.length);
@@ -1270,11 +1269,62 @@ function buildEdgarDocLink(cik, accession, primaryDoc) {
   return `${EDGAR_BASE}/Archives/edgar/data/${cikInt}/${accNoDashes}/`;
 }
 
+// Returns true ONLY if these filings genuinely look like an SPV trail.
+// An SPV trail means: third parties created Special Purpose Vehicles to
+// assemble exposure to the named company. Most filings should be Form D
+// from small entities whose name explicitly references the company.
+//
+// This filter prevents misidentifying mutual fund disclosures (NPORT-P) and
+// public-company 8-Ks/proxies as SPV trails, which was the OpenAI/Stripe bug.
+function isGenuineSpvTrail(rows, companyName) {
+  if (!rows || rows.length < 5) return false;
+  if (!companyName) return false;
+
+  const companyLower = companyName.toLowerCase();
+  const tokens = companyLower.split(/\s+/).filter(t => t.length > 2);
+  if (tokens.length === 0) return false;
+
+  // A row is "SPV-like" if:
+  //   - Form is D or D/A (Form D is the SPV signature)
+  //   - The filer name contains the company name (or a key token)
+  const spvLikeRows = rows.filter(r => {
+    const isFormD = r.form_type === 'D' || r.form_type === 'D/A';
+    if (!isFormD) return false;
+    const filerLower = (r.filer_name || '').toLowerCase();
+    return tokens.some(t => filerLower.includes(t));
+  });
+
+  // Need at least 5 SPV-like filings AND they must be the majority
+  if (spvLikeRows.length < 5) return false;
+  if (spvLikeRows.length / rows.length < 0.5) return false;
+
+  // Need diversity of filers among the SPV-like rows
+  const uniqueSpvFilers = new Set(spvLikeRows.map(r => r.filer_name)).size;
+  if (uniqueSpvFilers < 3) return false;
+
+  return true;
+}
+
 // Group filings into filer "families" (Hiive, Augurey, Linqto etc.)
-function groupByFilerFamily(rows) {
+// When companyName is provided, ONLY groups Form D filings from filers whose
+// names contain the company. This prevents grouping mutual fund disclosures
+// or public-company 8-Ks as if they were SPVs.
+function groupByFilerFamily(rows, companyName) {
+  // If a company is given, restrict to SPV-like rows
+  let workingRows = rows;
+  if (companyName) {
+    const tokens = companyName.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    workingRows = rows.filter(r => {
+      const isFormD = r.form_type === 'D' || r.form_type === 'D/A';
+      if (!isFormD) return false;
+      const filerLower = (r.filer_name || '').toLowerCase();
+      return tokens.some(t => filerLower.includes(t));
+    });
+  }
+
   const families = new Map();
 
-  for (const row of rows) {
+  for (const row of workingRows) {
     const family = detectFilerFamily(row.filer_name);
     if (!families.has(family)) {
       families.set(family, {
@@ -1478,16 +1528,34 @@ function parseFiling(hit, contextCompanyName) {
   // State of incorporation
   const stateOfInc = src.state_of_inc || src.state_inc || null;
 
-  // Build EDGAR document link
-  const accession = src.adsh || id;
+  // Build EDGAR document link.
+  // The full-text search id is formatted "ACCESSION:DOCUMENT" (e.g.
+  // "0001234567-26-000001:primary_doc.html"). When we have both, we can build
+  // a direct link to the actual filing document. Otherwise fall back to the
+  // filing's index page (still better than the old getcompany browse link).
+  const idParts = id.split(':');
+  const accession = src.adsh || idParts[0] || '';
+  const docFile = idParts[1] || null;
+  const cik = ciks[0];
   const accNoDashes = String(accession).replace(/-/g, '');
-  const docLink = ciks[0]
-    ? `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${ciks[0]}&type=${formType}`
-    : `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
+
+  let docLink;
+  if (cik && accNoDashes && docFile) {
+    // Direct link to the filing document
+    docLink = `${EDGAR_BASE}/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/${docFile}`;
+  } else if (cik && accNoDashes) {
+    // Filing index page (lists all documents in the filing)
+    docLink = `${EDGAR_BASE}/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/`;
+  } else if (cik) {
+    // Last resort: company filings browse
+    docLink = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}`;
+  } else {
+    docLink = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
+  }
 
   return {
     filer_name: cleanFilerName(displayName),
-    cik: ciks[0] || null,
+    cik: cik || null,
     form_type: formType,
     filed_date: filedDate,
     amount,

@@ -691,138 +691,228 @@ button {
 }
 
 /* ============================================================================
-   SEC EDGAR card layouts — ported from fedmo's visual language
-   No tinted backgrounds inside cards. No decorative left borders.
-   Hierarchy through type weight and white space, not ornament.
+   SEC EDGAR cards — Jobs/Lupton restraint
+   One finding per card. Bar charts show proportionality. Every row is a link.
+   Hierarchy through type, not ornament. No tints, no badges, no chrome.
    ============================================================================ */
 
-/* .sec-card is layout-only — parent .turn-mo-card has the visual frame */
-.sec-card { /* no styles needed */ }
+.sec-card {
+  /* parent .turn-mo-card has the visual frame; we just lay out content */
+}
 
-/* Stat row — bordered top + bottom, no fill (fedmo pattern) */
-.mo-stat-row {
+/* ── Headline ─────────────────────────────────────────────────────────── */
+
+.sec-headline {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 0 0 4px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.sec-subhead {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Bar chart (SPV trail card) ───────────────────────────────────────── */
+
+.sec-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 20px;
+}
+
+.sec-bar-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  padding: 16px 0;
-  margin: 16px 0 4px;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-.mo-stat-row:has(.mo-stat:nth-child(2):last-child) {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: minmax(80px, 140px) 1fr 32px;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
 }
 
-.mo-stat {
+.sec-bar-label {
+  color: var(--text-title);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.sec-bar-track {
+  background: var(--border-soft);
+  border-radius: 3px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.sec-bar-fill {
+  background: var(--primary-100);
+  height: 100%;
+  border-radius: 3px;
+  transition: width 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sec-bar-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text-title);
+  font-size: 13px;
+  text-align: right;
+}
+
+/* ── Insight line: the headline finding from the data ─────────────────── */
+
+.sec-insight {
+  font-size: 14px;
+  color: var(--text-body);
+  line-height: 1.5;
+  margin: 4px 0 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* ── Filing rows: every row is a clickable link ───────────────────────── */
+
+.sec-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.sec-row {
+  display: grid;
+  grid-template-columns: 110px 60px 1fr 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-soft);
+  text-decoration: none;
+  color: inherit;
+  transition: opacity 120ms ease;
+  font-size: 13px;
+}
+.sec-row:last-child { border-bottom: none; }
+.sec-row:hover { opacity: 0.65; }
+
+.sec-row-date {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sec-row-form {
+  color: var(--text-title);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sec-row-amount {
+  color: var(--text-title);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+  margin-left: auto;
+}
+
+.sec-row-arrow {
+  color: var(--text-faint);
+  font-size: 14px;
+  text-align: right;
+}
+
+/* Two-line tall row (for filings_list with filer name + meta) */
+.sec-row-tall {
+  grid-template-columns: 1fr auto 16px;
+  padding: 14px 0;
+  align-items: center;
+}
+
+.sec-row-tall .sec-row-main {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.mo-stat-value {
-  font-size: 18px;
-  font-weight: 600;
+.sec-row-tall .sec-row-filer {
   color: var(--text-title);
-  letter-spacing: var(--track-tight);
-  font-variant-numeric: tabular-nums;
-}
-
-.mo-stat-label {
-  font-size: 11px;
-  color: var(--text-muted);
   font-weight: 500;
-}
-
-/* Group/section heading: title left, meta right — no fills */
-.mo-comp-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin: 20px 0 8px;
-  gap: 12px;
-}
-
-.mo-comp-head:first-of-type {
-  margin-top: 16px;
-}
-
-.mo-comp-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-title);
-  letter-spacing: var(--track-tight);
-  flex: 1;
-  min-width: 0;
-}
-
-.mo-comp-meta {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-/* List + row primitives — clean rows separated by hairlines */
-.mo-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.mo-row {
-  display: flex;
-  align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border-soft);
-  font-size: 14px;
-  gap: 12px;
-  min-height: 44px;
-}
-.mo-row:last-child { border-bottom: none; }
-
-.mo-row-name {
-  color: var(--text-title);
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.mo-row-amount {
-  color: var(--text-title);
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-  flex-shrink: 0;
-  min-width: 56px;
-  text-align: right;
-}
-
-/* Two-line row (filer name on top, meta line below) */
-.mo-row-2line {
-  display: block;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border-soft);
-  text-decoration: none;
-  color: inherit;
-  transition: opacity 120ms ease;
-}
-.mo-row-2line:last-child { border-bottom: none; }
-.mo-row-2line:hover { opacity: 0.7; }
-
-.mo-row-2line-top {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 22px;
-}
-
-.mo-row-2line-meta {
-  font-size: 12px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-  margin-top: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sec-row-tall .sec-row-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Link out: "View all on EDGAR" ────────────────────────────────────── */
+
+.sec-link-out {
+  display: inline-block;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--primary-100);
+  text-decoration: none;
+  width: 100%;
+  transition: opacity 120ms ease;
+}
+.sec-link-out:hover { opacity: 0.7; }
+
+.sec-foot-note {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────── */
+
+.sec-card-empty {
+  text-align: left;
+  padding: 4px 0;
+}
+
+.sec-empty-headline {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 0 0 4px;
+}
+
+.sec-empty-query {
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sec-empty-message {
+  font-size: 13px;
+  color: var(--text-body);
+  line-height: 1.5;
+  max-width: 480px;
+}
+
+/* ── Mobile tightening ────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .sec-headline { font-size: 19px; }
+  .sec-subhead { margin-bottom: 16px; }
+  .sec-bar-row { grid-template-columns: minmax(60px, 110px) 1fr 28px; gap: 8px; }
+  .sec-row { grid-template-columns: 80px 50px 1fr 14px; gap: 8px; font-size: 12px; }
+  .sec-row-tall .sec-row-filer { font-size: 13px; }
+  .sec-row-tall .sec-row-meta { font-size: 10px; }
 }
