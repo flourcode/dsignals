@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mo · No-Data Audit</title>
+  <style>
+    body {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: #FDFCFF;
+      color: #2E2C35;
+      line-height: 1.5;
+    }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+    .sub { font-size: 13px; color: #6C6880; margin-bottom: 24px; }
+
+    .audit {
+      background: #FFFFFF;
+      border: 1px solid #E0DEEA;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .audit-q {
+      font-weight: 600;
+      color: #2C2933;
+      margin-bottom: 4px;
+    }
+    .audit-mo {
+      font-size: 12px;
+      color: #6C6880;
+      font-style: italic;
+      margin-bottom: 12px;
+    }
+    .audit-status {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .audit-status.pending { background: #F0F0F5; color: #6C6880; }
+    .audit-status.done { background: #E5F4E5; color: #2D5033; }
+    .audit-status.suspicious { background: #FFE5E0; color: #7A3520; }
+
+    .audit-result {
+      background: #F6F5FB;
+      padding: 12px;
+      border-radius: 12px;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    .audit-result-line {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid #E0DEEA;
+    }
+    .audit-result-line:last-child { border-bottom: none; }
+    .audit-result-key { color: #6C6880; }
+    .audit-result-val { font-variant-numeric: tabular-nums; font-weight: 500; }
+
+    .audit-samples {
+      margin-top: 12px;
+      font-size: 12px;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+    .audit-sample-row {
+      padding: 6px 0;
+      border-bottom: 1px solid #E0DEEA;
+      display: flex;
+      gap: 12px;
+    }
+    .audit-sample-row:last-child { border-bottom: none; }
+    .audit-sample-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .audit-sample-meta { color: #6C6880; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+    .verdict {
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+    .verdict.honest { background: #E5F4E5; color: #2D5033; border-left: 3px solid #2D5033; padding-left: 12px; }
+    .verdict.over-filtered { background: #FFE5E0; color: #7A3520; border-left: 3px solid #7A3520; padding-left: 12px; }
+
+    button {
+      padding: 8px 16px;
+      background: #46446E;
+      color: white;
+      border: none;
+      border-radius: 999px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button:hover { background: #5C5A88; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>Mo · No-Data Audit</h1>
+  <div class="sub">For each query Mo returned no_data on, hit EDGAR directly with the same parameters and see what raw EDGAR actually has. If raw EDGAR returns plenty of results, Mo's filter is too aggressive.</div>
+  <button id="run">Run all 4 audits</button>
+
+  <div id="results" style="margin-top: 24px;"></div>
+
+<script>
+'use strict';
+
+// The exact queries Mo emitted and the no_data she returned in test results
+const AUDITS = [
+  {
+    label: 'AI Form Ds above $20M in last 60 days',
+    moQuery: 'sector="ai" form_type="D" min_amount="20000000" date_after="2026-02-25"',
+    edgarParams: {
+      q: '"artificial intelligence" OR "machine learning" OR "LLM" OR "large language model" OR "foundation model"',
+      forms: 'D',
+      dateRange: 'custom',
+      startdt: '2026-02-25',
+    },
+    minAmount: 20000000,
+  },
+  {
+    label: 'Cybersecurity Form Ds in California this year',
+    moQuery: 'sector="cybersecurity" form_type="D" state="CA" date_after="2026-01-01"',
+    edgarParams: {
+      q: '"cybersecurity" OR "cyber security" OR "information security" OR "infosec" OR "endpoint security"',
+      forms: 'D',
+      dateRange: 'custom',
+      startdt: '2026-01-01',
+    },
+    state: 'CA',
+  },
+  {
+    label: 'Climate tech raises this quarter',
+    moQuery: 'sector="climate" form_type="D" date_after="2026-04-01"',
+    edgarParams: {
+      q: '"climate" OR "carbon capture" OR "renewable energy" OR "clean energy" OR "solar"',
+      forms: 'D',
+      dateRange: 'custom',
+      startdt: '2026-04-01',
+    },
+  },
+  {
+    label: 'Fintech raises $10M+ last year',
+    moQuery: 'sector="fintech" form_type="D" min_amount="10000000" date_after="2025-01-01" date_before="2025-12-31"',
+    edgarParams: {
+      q: '"fintech" OR "payments platform" OR "digital banking" OR "neobank" OR "lending platform"',
+      forms: 'D',
+      dateRange: 'custom',
+      startdt: '2025-01-01',
+      enddt: '2025-12-31',
+    },
+    minAmount: 10000000,
+  },
+];
+
+// SAME non-operating filter Mo uses — pasted from Lambda code
+const NON_OPERATING_PATTERNS = [
+  /\bL\.?P\.?\s*$/i,
+  /\bfund\b/i,
+  /\bcapital\s+(partners|management|fund)\b/i,
+  /\bholdings\s+(fund|trust)\b/i,
+  /\btrust\s*$/i,
+  /\bmortgage\b/i,
+  /\bMBS\b/,
+  /\bCMBS\b/,
+  /\bABS\b/,
+  /\bCDO\b/,
+  /\bCLO\b/,
+  /\b(20\d{2})-[A-Z]+\d*\s+Mortgage/i,
+  /^BANK\s+\d{4}-/i,
+  /^BENCHMARK\s+\d{4}-/i,
+  /^COMM\s+\d{4}-/i,
+];
+
+function isNonOperatingFiler(filerName) {
+  if (!filerName) return false;
+  return NON_OPERATING_PATTERNS.some(re => re.test(filerName));
+}
+
+async function runAudit(audit, container) {
+  const block = document.createElement('div');
+  block.className = 'audit';
+  container.appendChild(block);
+
+  block.innerHTML = `
+    <div class="audit-q">${audit.label}</div>
+    <div class="audit-mo">Mo emitted: ${audit.moQuery}</div>
+    <span class="audit-status pending">Running</span>
+    <div class="audit-result-slot"></div>
+  `;
+
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(audit.edgarParams)) {
+    params.set(k, v);
+  }
+  params.set('hits', '100');
+
+  const url = `https://efts.sec.gov/LATEST/search-index?${params.toString()}`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json' },
+    });
+
+    if (!res.ok) throw new Error(`EDGAR ${res.status}`);
+    const data = await res.json();
+    const hits = data?.hits?.hits || [];
+    const totalRaw = data?.hits?.total?.value || hits.length;
+
+    // Parse rows the same way Mo does
+    const rows = hits.map(h => {
+      const src = h._source || {};
+      const displayName = (src.display_names || [])[0] || src.entity_name || '';
+      const cleanName = displayName.replace(/\s*\(\d+\)\s*\(Filer\)\s*$/, '').replace(/\s*\(\d+\)\s*$/, '').trim();
+      let amount = null;
+      if (src.offering_amount) amount = parseInt(src.offering_amount, 10);
+      else if (src.xbrl_total_offering_amount) amount = parseInt(src.xbrl_total_offering_amount, 10);
+      return {
+        filer_name: cleanName,
+        form_type: src.form || '?',
+        filed_date: src.file_date || null,
+        amount,
+        state_of_inc: src.state_of_inc || src.state_inc || null,
+      };
+    });
+
+    // Apply Mo's exact filter pipeline
+    let filtered = rows;
+    const droppedNonOperating = filtered.filter(r => isNonOperatingFiler(r.filer_name));
+    filtered = filtered.filter(r => !isNonOperatingFiler(r.filer_name));
+
+    let droppedAmount = [];
+    if (audit.minAmount) {
+      droppedAmount = filtered.filter(r => !r.amount || r.amount < audit.minAmount);
+      filtered = filtered.filter(r => r.amount && r.amount >= audit.minAmount);
+    }
+
+    let droppedState = [];
+    if (audit.state) {
+      droppedState = filtered.filter(r => r.state_of_inc !== audit.state);
+      filtered = filtered.filter(r => r.state_of_inc === audit.state);
+    }
+
+    // Verdict
+    let verdict;
+    let status;
+    if (filtered.length > 0) {
+      verdict = `<div class="verdict over-filtered"><strong>OVER-FILTERED.</strong> Raw EDGAR returned ${totalRaw} hits, ${filtered.length} survived all filters. Mo should have shown these.</div>`;
+      status = 'suspicious';
+    } else if (rows.length === 0) {
+      verdict = `<div class="verdict honest"><strong>Genuinely empty.</strong> EDGAR returned 0 hits for this query. Mo's no_data was correct.</div>`;
+      status = 'done';
+    } else if (audit.minAmount && droppedAmount.length > 0 && droppedNonOperating.length === 0) {
+      verdict = `<div class="verdict honest"><strong>Filtered by amount.</strong> EDGAR had ${rows.length} matches but ${droppedAmount.length} were dropped because they had no offering_amount or were below $${(audit.minAmount/1_000_000).toFixed(0)}M. Many Form Ds don't fill in offering_amount, so this is partly EDGAR data quality.</div>`;
+      status = 'done';
+    } else {
+      verdict = `<div class="verdict honest"><strong>Filtered out.</strong> EDGAR had ${rows.length} matches but all were dropped by ${droppedNonOperating.length} non-operating + ${droppedAmount.length} amount + ${droppedState.length} state filters.</div>`;
+      status = 'done';
+    }
+
+    const samplesHtml = filtered.slice(0, 5).map(r => `
+      <div class="audit-sample-row">
+        <div class="audit-sample-name">${escapeHtml(r.filer_name)}</div>
+        <div class="audit-sample-meta">${r.form_type} · ${r.filed_date || '?'}${r.amount ? ' · $' + (r.amount/1_000_000).toFixed(1) + 'M' : ''}${r.state_of_inc ? ' · ' + r.state_of_inc : ''}</div>
+      </div>
+    `).join('');
+
+    const droppedNonOpHtml = droppedNonOperating.slice(0, 3).map(r => `
+      <div class="audit-sample-row">
+        <div class="audit-sample-name">${escapeHtml(r.filer_name)}</div>
+        <div class="audit-sample-meta">dropped: non-operating</div>
+      </div>
+    `).join('');
+
+    block.querySelector('.audit-status').className = `audit-status ${status}`;
+    block.querySelector('.audit-status').textContent = status === 'suspicious' ? 'OVER-FILTERED' : 'OK';
+
+    block.querySelector('.audit-result-slot').innerHTML = `
+      <div class="audit-result">
+        <div class="audit-result-line"><span class="audit-result-key">Total raw hits</span><span class="audit-result-val">${totalRaw}</span></div>
+        <div class="audit-result-line"><span class="audit-result-key">Returned in this batch</span><span class="audit-result-val">${rows.length}</span></div>
+        <div class="audit-result-line"><span class="audit-result-key">Dropped: non-operating filers</span><span class="audit-result-val">${droppedNonOperating.length}</span></div>
+        ${audit.minAmount ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: below $${(audit.minAmount/1_000_000).toFixed(0)}M</span><span class="audit-result-val">${droppedAmount.length}</span></div>` : ''}
+        ${audit.state ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: not ${audit.state}</span><span class="audit-result-val">${droppedState.length}</span></div>` : ''}
+        <div class="audit-result-line"><span class="audit-result-key">Survived all filters</span><span class="audit-result-val">${filtered.length}</span></div>
+      </div>
+      ${filtered.length > 0 ? `<div class="audit-samples"><strong>Filings Mo should have shown:</strong>${samplesHtml}</div>` : ''}
+      ${droppedNonOperating.length > 0 && filtered.length === 0 ? `<div class="audit-samples"><strong>Sample of what was dropped:</strong>${droppedNonOpHtml}</div>` : ''}
+      ${verdict}
+    `;
+
+  } catch (err) {
+    block.querySelector('.audit-status').className = 'audit-status suspicious';
+    block.querySelector('.audit-status').textContent = 'Failed';
+    block.querySelector('.audit-result-slot').innerHTML = `<div class="verdict over-filtered">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+document.getElementById('run').addEventListener('click', async () => {
+  document.getElementById('run').disabled = true;
+  const container = document.getElementById('results');
+  container.innerHTML = '';
+  for (const audit of AUDITS) {
+    await runAudit(audit, container);
+  }
+  document.getElementById('run').disabled = false;
+});
+</script>
+</body>
+</html>
