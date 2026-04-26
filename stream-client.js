@@ -166,7 +166,8 @@
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let sseBuffer = '';
-    let textBuffer = '';
+    let textBuffer = '';      // raw, includes the tag if present
+    let displayedText = '';   // what's actually visible — stripped at the tag
     let tagFound = null;
     let stopAccumulating = false;
 
@@ -194,11 +195,20 @@
             const tagMatch = textBuffer.match(/<data\b([^>]*?)\/>/);
             if (tagMatch && !tagFound) {
               tagFound = parseTagAttrs(tagMatch[1]);
-              const beforeTag = textBuffer.slice(0, tagMatch.index);
-              proseEl.innerHTML = renderProse(beforeTag);
+              displayedText = textBuffer.slice(0, tagMatch.index).trimEnd();
+              proseEl.innerHTML = renderProse(displayedText);
               stopAccumulating = true;
             } else {
-              proseEl.innerHTML = renderProse(textBuffer);
+              // No tag yet — but if we see what looks like the START of a tag,
+              // hide that incomplete portion from display so the user doesn't
+              // see "<data location=" flash on screen mid-stream.
+              const partialStart = textBuffer.lastIndexOf('<data');
+              if (partialStart !== -1) {
+                displayedText = textBuffer.slice(0, partialStart).trimEnd();
+              } else {
+                displayedText = textBuffer;
+              }
+              proseEl.innerHTML = renderProse(displayedText);
             }
           } else if (parsed.t === 'error') {
             throw new Error(parsed.message || 'Stream error');
@@ -215,7 +225,8 @@
       }
     }
 
-    return { text: textBuffer, tag: tagFound };
+    // Return the cleaned display text (without tag), not the raw buffer
+    return { text: displayedText, raw: textBuffer, tag: tagFound };
   }
 
   // ──────────────────────────────────────────────────────────────────────────
