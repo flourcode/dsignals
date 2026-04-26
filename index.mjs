@@ -145,6 +145,24 @@ Tag attributes (use only what the user implied; don't invent constraints they di
 
   date_before    : ISO date (YYYY-MM-DD). Filings on or before this date.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTOR QUERIES HAVE A REAL LIMITATION — SET EXPECTATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When the user asks for a sector + date query ("AI raises last month", "climate Form Ds this quarter", "fintech raises last year"), be honest in pass-1: EDGAR's full-text search ranks by RELEVANCE, not date. For broad sectors like "climate" or "energy" with thousands of historical filings, EDGAR's top results are almost always old infrastructure funds and mature companies — recent operating-company raises often don't surface.
+
+For these queries, pass-1 should set expectations BEFORE the user sees a possibly-empty result:
+
+User: "Climate tech raises this quarter"
+Good: "Climate is a noisy keyword in EDGAR — a lot of old infrastructure funds match it. Let me see what's recent and operating-company, but if it's quiet, you'd probably want to track specific climate-tech company names directly. <data sector='climate' form_type='D' date_after='2026-04-01' />"
+
+User: "Fintech raises last year"
+Good: "Fintech sector queries can be hit-or-miss because EDGAR ranks by relevance not date — recent raises sometimes get buried. Pulling what I can find. <data sector='fintech' form_type='D' date_after='2025-01-01' date_before='2025-12-31' />"
+
+DO NOT promise a clean result. DO NOT pretend EDGAR is a comprehensive sector database. It isn't.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 EXAMPLES:
 
 User: "Show me Anthropic's filings"
@@ -1721,11 +1739,30 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
   }
 
   if (rows.length === 0) {
+    // Build a context-aware no_data message
+    let message;
+    const sectorDisplay = sector && SECTORS[sector] ? SECTORS[sector].display : null;
+
+    if (totalRaw >= 500 && (dateAfter || dateBefore)) {
+      // EDGAR FTS limitation: lots of total hits but none in date range
+      // because EDGAR sorts by relevance, not date
+      message = `EDGAR has ${totalRaw.toLocaleString()} filings matching ${sectorDisplay || 'these keywords'}, but none of the top ${pagesActuallyFetched * 100} relevance-ranked results fell in your date range. EDGAR's full-text search ranks by relevance across all time — it doesn't reliably surface recent sector activity. To find current ${sectorDisplay || 'sector'} raises, try pulling a specific company's filings (e.g. "${sector === 'climate' ? 'Sunrun filings' : sector === 'cybersecurity' ? 'CrowdStrike filings' : 'a known company name'}") instead.`;
+    } else if (state && totalRaw > 50) {
+      // State filter killed everything — likely state-of-incorporation issue
+      message = `${totalRaw.toLocaleString()} filings matched the keyword search, but none had ${state} as their state of INCORPORATION. Most US tech and finance companies incorporate in Delaware regardless of where they operate, so state filters often miss the real answer. Want me to search without the state filter?`;
+    } else if (totalRaw === 0) {
+      // Genuinely nothing in EDGAR
+      message = `EDGAR has no filings matching ${sectorDisplay || 'these keywords'}${dateAfter ? ` since ${dateAfter}` : ''}${formType ? ` on Form ${formType}` : ''}. Try a different sector keyword or a wider date range.`;
+    } else {
+      // Filtered out by funds/trusts
+      message = `${totalRaw.toLocaleString()} filings matched, but all were funds, trusts, or special-purpose vehicles after filtering — no operating-company raises in this window. Try widening the date range or checking a known company directly.`;
+    }
+
     return {
       card: {
         kind: 'no_data',
         query_summary: buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }),
-        message: 'No operating-company filings matched those filters after dropping funds and trusts. Try widening the date range, removing the amount filter, or checking back — Form Ds run on a 15-day filing window.',
+        message,
       },
     };
   }
