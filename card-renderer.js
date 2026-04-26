@@ -61,18 +61,30 @@
     return `$${amount.toLocaleString()}`;
   };
 
+  // Parse YYYY-MM-DD as local date (avoids timezone shift that turns
+  // "2026-01-01" into "2025-12-31" in negative-UTC timezones)
+  const parseLocalDate = (d) => {
+    if (!d) return null;
+    if (d instanceof Date) return d;
+    const s = String(d);
+    const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymd) {
+      return new Date(parseInt(ymd[1], 10), parseInt(ymd[2], 10) - 1, parseInt(ymd[3], 10));
+    }
+    const fallback = new Date(s);
+    return isNaN(fallback.getTime()) ? null : fallback;
+  };
+
   const fmtDate = (d) => {
-    if (!d) return '';
-    const date = new Date(d);
-    if (isNaN(date.getTime())) return d;
+    const date = parseLocalDate(d);
+    if (!date) return d || '';
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
   };
 
   const fmtDateShort = (d) => {
-    if (!d) return '';
-    const date = new Date(d);
-    if (isNaN(date.getTime())) return d;
+    const date = parseLocalDate(d);
+    if (!date) return d || '';
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return `${months[date.getMonth()]} ${date.getDate()}`;
   };
@@ -83,6 +95,58 @@
     const cikInt = parseInt(cik, 10);
     return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cikInt}&type=&dateb=&owner=include&count=40`;
   };
+
+  // Sparkline timeline: a horizontal SVG strip showing when each filing
+  // happened across the data's date range. Each dot is one filing.
+  // Mobile-first: 100% width, 36px tall, no chrome.
+  function buildSparkline(timeline) {
+    if (!timeline || !timeline.dates || timeline.dates.length < 2) return '';
+
+    const dates = timeline.dates.map(d => parseLocalDate(d)).filter(Boolean);
+    if (dates.length < 2) return '';
+
+    const startDate = parseLocalDate(timeline.start);
+    const endDate = parseLocalDate(timeline.end);
+    if (!startDate || !endDate) return '';
+
+    const startMs = startDate.getTime();
+    const endMs = endDate.getTime();
+    // Add 5% padding on each side so dots aren't flush against edges
+    const span = Math.max(endMs - startMs, 86400000); // at least 1 day
+    const padding = span * 0.04;
+    const minMs = startMs - padding;
+    const maxMs = endMs + padding;
+    const totalSpan = maxMs - minMs;
+
+    const W = 1000;     // viewBox width — scales to container
+    const H = 36;       // viewBox height
+    const dotRadius = 3.5;
+    const lineY = 18;
+
+    // Position each dot
+    const dots = dates.map(d => {
+      const x = ((d.getTime() - minMs) / totalSpan) * W;
+      return `<circle cx="${x.toFixed(1)}" cy="${lineY}" r="${dotRadius}" />`;
+    }).join('');
+
+    // Compute month tick labels — pick 3-5 labels evenly spaced
+    const monthsList = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const startLabel = `${monthsList[startDate.getMonth()]} ${startDate.getFullYear()}`;
+    const endLabel = `${monthsList[endDate.getMonth()]} ${endDate.getFullYear()}`;
+
+    return `
+      <div class="sec-sparkline">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="sec-sparkline-svg" aria-hidden="true">
+          <line x1="0" y1="${lineY}" x2="${W}" y2="${lineY}" class="sec-sparkline-axis" />
+          <g class="sec-sparkline-dots">${dots}</g>
+        </svg>
+        <div class="sec-sparkline-labels">
+          <span>${escapeHtml(startLabel)}</span>
+          <span>${escapeHtml(endLabel)}</span>
+        </div>
+      </div>
+    `;
+  }
 
   // ── public entry ──────────────────────────────────────────────────────────
 
@@ -159,6 +223,10 @@
       insight += ` Most recent: ${fmtDate(latestDate)}.`;
     }
 
+    // Sparkline: timeline of when filings happened across the date range.
+    // Reveals acceleration patterns the bar chart can't show.
+    const sparklineHtml = card.timeline ? buildSparkline(card.timeline) : '';
+
     // Link out: company filings page on EDGAR
     const cikForLink = card.rows?.[0]?.cik;
     const allFilingsUrl = buildCompanyFilingsUrl(cikForLink);
@@ -169,6 +237,8 @@
         <div class="sec-subhead">${subtitleParts.join(' · ')}</div>
 
         <div class="sec-bars">${safe(barsHtml)}</div>
+
+        ${safe(sparklineHtml)}
 
         <div class="sec-insight">${insight}</div>
 

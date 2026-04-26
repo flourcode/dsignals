@@ -916,3 +916,39 @@ button {
   .sec-row-tall .sec-row-filer { font-size: 13px; }
   .sec-row-tall .sec-row-meta { font-size: 10px; }
 }
+
+/* ── Sparkline timeline (SPV trail card) ──────────────────────────────── */
+
+.sec-sparkline {
+  margin: 16px 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.sec-sparkline-svg {
+  display: block;
+  width: 100%;
+  height: 36px;
+  overflow: visible;
+}
+
+.sec-sparkline-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.sec-sparkline-dots circle {
+  fill: var(--primary-100);
+  opacity: 0.85;
+}
+
+.sec-sparkline-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}

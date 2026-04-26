@@ -217,6 +217,22 @@ BAD pass 2 (NEVER):
 "Let me try again..." [you can't from prose. Suggest a real fix.]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHEN THE QUERY IS VAGUE OR CONCEPTUAL — ASK BEFORE NARROWING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Some queries describe a concept rather than a specific filter. "Competitors of Hippocratic AI", "companies like Stripe", "AI safety startups", "early-stage cybersecurity plays". These can't be turned into a clean SEC search without losing fidelity. EDGAR doesn't index "competitors" or "companies like X" — and over-narrowing to a single sector + recent date will return useless results.
+
+For these, do PROSE first. Ask the user to name 2-3 specific companies, OR offer 2-3 reasonable interpretations they can pick from.
+
+User: "Competitors of Hippocratic AI"
+Good (PROSE — no tag): "EDGAR doesn't index competitive landscapes — it indexes filings. To pull useful data, I need names. If you give me 2-3 companies you're tracking against Hippocratic, I can pull their filing histories side by side. Or if you want a sector view, I can pull recent Form Ds in healthcare AI broadly — but that'll include everyone from drug discovery to telehealth. Which way works?"
+
+User: "AI safety startups"
+Good (PROSE): "AI safety isn't a SIC code — companies file under their broader sector. Anthropic, OpenAI, Conjecture, and Mechanize are the names usually grouped here. Want me to pull any of them, or pull recent AI Form Ds and let you scan?"
+
+DO NOT emit a tag that returns 1 result and then complain about the empty set. If the search would be too narrow, ask first.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHAT EDGAR CANNOT TELL YOU — BE HONEST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -240,6 +256,8 @@ NEVER fabricate filings, amounts, or dates. Everything you state must be either 
 NEVER claim to have read a filing's actual content. The card shows you metadata only — filer, form type, date, accession number. It does NOT show you the text inside the 10-K, 10-Q, S-1, or any other filing. You cannot quote risk factors, MD&A passages, specific dollar figures from financial statements, or any prose written inside a filing. If a user asks "what does Salesforce's 10-K say about AI risks," you can confirm the filing exists and link to it, but you must say honestly: "I can show you the filing exists. I can't read what's inside. The 2026 10-K is at the link — Item 1A Risk Factors is where their risk language lives."
 
 NEVER compare the contents of two filings against each other if the card only shows their metadata. Do not say "the 2026 filing emphasizes X more than the 2024 version" unless that comparison is visible on the card itself.
+
+NEVER add analytical color the data can't support. Do not claim "consistent cadence", "steady pace", "incredibly disciplined", "X is dialed in" based on a few dates alone. Three filings is not a "cadence." Two filings 18 months apart is not a "pattern." When the data is thin, say what you see ("filed in March each of the last three years") instead of editorializing about it ("incredibly consistent reporting cadence"). Numbers earn the descriptor, not the other way around.
 
 NEVER emit a \`<data />\` tag in your SECOND-pass response (when interpreting a card). Pure prose only.
 
@@ -519,23 +537,40 @@ const buildSystemPromptWithDate = (basePrompt) => {
   const minus = (days) => new Date(now.getTime() - days * 86400_000).toISOString().slice(0, 10);
   const yearStart = `${now.getUTCFullYear()}-01-01`;
 
+  // Calendar quarter start (Jan 1, Apr 1, Jul 1, or Oct 1)
+  const month = now.getUTCMonth();          // 0-11
+  const quarterStartMonth = Math.floor(month / 3) * 3;
+  const quarterStart = `${now.getUTCFullYear()}-${String(quarterStartMonth + 1).padStart(2, '0')}-01`;
+
+  // Last calendar quarter
+  let lastQuarterStartYear = now.getUTCFullYear();
+  let lastQuarterStartMonth = quarterStartMonth - 3;
+  if (lastQuarterStartMonth < 0) {
+    lastQuarterStartMonth = 9;  // Q4 of previous year
+    lastQuarterStartYear -= 1;
+  }
+  const lastQuarterStart = `${lastQuarterStartYear}-${String(lastQuarterStartMonth + 1).padStart(2, '0')}-01`;
+
   return basePrompt + `
 
 ━━━ CURRENT DATE ━━━
 
 Today is ${today}. ALWAYS compute date references relative to today, never relative to your training data.
 
-  "today"        → ${today}
-  "yesterday"    → ${minus(1)}
-  "last week"    → ${minus(7)}
-  "last month"   → ${minus(30)}
-  "this quarter" → ${minus(90)}
-  "this year"    → ${yearStart}
-  "recently"     → treat as "last month"
+  "today"           → ${today}
+  "yesterday"       → ${minus(1)}
+  "last week"       → ${minus(7)}
+  "last month"      → ${minus(30)}
+  "last 60 days"    → ${minus(60)}
+  "last 90 days"    → ${minus(90)}
+  "this quarter"    → ${quarterStart}    (current calendar quarter start)
+  "last quarter"    → ${lastQuarterStart} (previous calendar quarter start)
+  "this year"       → ${yearStart}
+  "recently"        → treat as "last month"
 
 When emitting a date_after attribute and the user used a relative phrase like "last month" or "this year", substitute the ISO date from the table above. Do NOT emit the placeholder LAST_MONTH; emit the actual date.
 
-If the user gives a specific year (e.g. "in 2024"), use that year's exact start/end dates.
+If the user gives a specific year (e.g. "in 2024"), use that year's exact start and end (date_after="2024-01-01", date_before="2024-12-31").
 `;
 };
 
@@ -1160,6 +1195,7 @@ async function fetchPrivateCompanyFilings({ companyName, companyAlias, formType,
       rows,
       groups,
       is_spv_trail: isSpvTrail,
+      timeline: isSpvTrail ? buildTimeline(rows) : null,
     },
   };
 }
@@ -1249,6 +1285,7 @@ async function fetchUnknownCompanyFilings({ companyName, formType, dateAfter, da
       rows,
       groups,
       is_spv_trail: isSpvTrail,
+      timeline: isSpvTrail ? buildTimeline(rows) : null,
     },
   };
 }
@@ -1259,13 +1296,13 @@ async function fetchUnknownCompanyFilings({ companyName, formType, dateAfter, da
 
 function buildEdgarDocLink(cik, accession, primaryDoc) {
   if (!cik || !accession) return `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
-  // Strip leading zeros for the directory path; submission accession needs dashes removed for path
   const cikInt = parseInt(cik, 10);
   const accNoDashes = String(accession).replace(/-/g, '');
-  if (primaryDoc) {
+  // If primary doc is HTML/PDF, link directly to it. If it's XML (XBRL), link
+  // to the filing index page where EDGAR auto-renders a readable view.
+  if (primaryDoc && !/\.xml$/i.test(primaryDoc)) {
     return `${EDGAR_BASE}/Archives/edgar/data/${cikInt}/${accNoDashes}/${primaryDoc}`;
   }
-  // Fall back to the filing index page
   return `${EDGAR_BASE}/Archives/edgar/data/${cikInt}/${accNoDashes}/`;
 }
 
@@ -1303,6 +1340,25 @@ function isGenuineSpvTrail(rows, companyName) {
   if (uniqueSpvFilers < 3) return false;
 
   return true;
+}
+
+// Build a sparkline timeline payload from the filings.
+// Returns the date range and an array of date strings (one per filing).
+// Renderer turns this into a horizontal scatter of dots showing when
+// activity happened across the period. Especially useful for spotting
+// acceleration vs steady cadence.
+function buildTimeline(rows) {
+  if (!rows || rows.length === 0) return null;
+  const dates = rows
+    .map(r => r.filed_date)
+    .filter(Boolean)
+    .sort();
+  if (dates.length === 0) return null;
+  return {
+    start: dates[0],
+    end: dates[dates.length - 1],
+    dates,
+  };
 }
 
 // Group filings into filer "families" (Hiive, Augurey, Linqto etc.)
@@ -1531,8 +1587,12 @@ function parseFiling(hit, contextCompanyName) {
   // Build EDGAR document link.
   // The full-text search id is formatted "ACCESSION:DOCUMENT" (e.g.
   // "0001234567-26-000001:primary_doc.html"). When we have both, we can build
-  // a direct link to the actual filing document. Otherwise fall back to the
-  // filing's index page (still better than the old getcompany browse link).
+  // a direct link to the actual filing document.
+  //
+  // BUT: many Form Ds have primary_doc.xml as the document, which renders as
+  // raw XBRL in the browser. The filing's INDEX page (just the directory
+  // listing) is much more useful — it shows the human-readable filing list
+  // including primary_doc.html. So we skip XML docs and link to the index.
   const idParts = id.split(':');
   const accession = src.adsh || idParts[0] || '';
   const docFile = idParts[1] || null;
@@ -1540,14 +1600,14 @@ function parseFiling(hit, contextCompanyName) {
   const accNoDashes = String(accession).replace(/-/g, '');
 
   let docLink;
-  if (cik && accNoDashes && docFile) {
-    // Direct link to the filing document
+  if (cik && accNoDashes && docFile && !/\.xml$/i.test(docFile)) {
+    // Direct link to the readable filing document (HTML/PDF)
     docLink = `${EDGAR_BASE}/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/${docFile}`;
   } else if (cik && accNoDashes) {
-    // Filing index page (lists all documents in the filing)
+    // Filing index page — EDGAR auto-renders Form D XML as readable HTML here
+    // and shows the document list for any other filing type
     docLink = `${EDGAR_BASE}/Archives/edgar/data/${parseInt(cik, 10)}/${accNoDashes}/`;
   } else if (cik) {
-    // Last resort: company filings browse
     docLink = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}`;
   } else {
     docLink = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
