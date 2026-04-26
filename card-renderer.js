@@ -161,7 +161,7 @@
         <div class="card-subtitle">SPV trail · SEC EDGAR full-text search</div>
         ${safe(statsHtml)}
         ${safe(groupsHtml)}
-        <div class="card-footer">Source: SEC EDGAR · ${total > card.shown ? `Top ${card.shown} of ${total}` : `All ${total} filings`}</div>
+        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ filings (search capped)` : (total > card.shown ? `Top ${card.shown} of ${total}` : `All ${total} filings`)}</div>
       </div>
     `);
   }
@@ -196,9 +196,9 @@
     return fromHtml(html`
       <div class="sec-card">
         <div class="card-title">${company}</div>
-        <div class="card-subtitle">${total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
+        <div class="card-subtitle">${card.total_capped ? `${total}+` : total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
         <div class="mo-list">${safe(rowsHtml)}</div>
-        <div class="card-footer">Source: SEC EDGAR · ${rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`}</div>
+        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ matches (search capped)` : (rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`)}</div>
       </div>
     `);
   }
@@ -234,9 +234,9 @@
     return fromHtml(html`
       <div class="sec-card">
         <div class="card-title">${summary}</div>
-        <div class="card-subtitle">${total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
+        <div class="card-subtitle">${card.total_capped ? `${total}+` : total} filing${total === 1 ? '' : 's'}${filterLine ? ` · ${filterLine}` : ''}</div>
         <div class="mo-list">${safe(rowsHtml)}</div>
-        <div class="card-footer">Source: SEC EDGAR · ${rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`}</div>
+        <div class="card-footer">Source: SEC EDGAR · ${card.total_capped ? `${total}+ matches (search capped)` : (rows.length < total ? `Top ${rows.length} of ${total}` : `All ${total}`)}</div>
       </div>
     `);
   }

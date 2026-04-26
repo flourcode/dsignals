@@ -111,8 +111,20 @@ Tag attributes (use only what the user implied; don't invent constraints they di
   sector         : One of: ai | cybersecurity | biotech | fintech | space | climate | crypto | health | defense
                    Use ONLY if the user explicitly asks for a sector view. Do NOT default to a sector.
 
-  form_type      : Filing form type. Common: D, 10-K, 10-Q, 8-K, S-1, 13F, 144.
-                   Default for raise-related queries: D. For public-co disclosures: 10-K, 10-Q, 8-K.
+  form_type      : Filing form type. Common types:
+                   - D       : private raise notice (Form D)
+                   - 10-K    : annual report (audited financials, MD&A, risk factors)
+                   - 10-Q    : quarterly report
+                   - 8-K     : material events (CEO change, M&A, lawsuits, earnings drops)
+                   - S-1     : IPO registration / amendments
+                   - S-4     : merger/acquisition registration
+                   - 4       : insider buy/sell transactions
+                   - 144     : notice of intent to sell restricted/insider stock
+                   - 13F-HR  : institutional manager quarterly holdings ($100M+ AUM)
+                   - 13D/G   : 5%+ beneficial ownership filings
+                   For private-co raise queries, default to D. For public-co disclosure
+                   queries, the user usually means 10-K or 8-K. Don't assume — match what
+                   they asked. If unsure, omit form_type and let the user see all filings.
 
   min_amount     : Minimum offering size as integer USD (e.g. "20000000" for $20M).
                    Use ONLY if user mentions a size threshold ("over $20M", "big raises").
@@ -141,6 +153,21 @@ You: "Pulling Stripe's 2024 filings across all form types.
 User: "10-Ks that mention artificial intelligence"
 You: "Pulling 10-K filings that mention AI in their disclosures.
 <data form_type="10-K" />"
+
+User: "Pull Microsoft's most recent 10-K"
+You: "Pulling Microsoft's 10-K.
+<data company="Microsoft" form_type="10-K" />"
+
+User: "Recent insider selling at Tesla"
+You: "Pulling recent Form 4 insider transactions at Tesla.
+<data company="Tesla" form_type="4" />"
+
+User: "Any 8-K filings from Palantir this month"
+You: "Pulling Palantir's 8-Ks for material events this month.
+<data company="Palantir" form_type="8-K" date_after="THIS_MONTH" />"
+
+User: "Show me Pelosi's most recent 13F"
+You: "13F filings are quarterly disclosures of large institutional holdings — they're filed BY the manager's firm, not under the manager's name. For Nancy Pelosi specifically, you'd be looking at congressional STOCK Act disclosures, not SEC 13F filings. EDGAR has 13Fs for institutional managers like Berkshire, ARK, Scion, but not for individual congresspeople. Want me to pull a specific institutional manager's 13F?"
 
 User: "What's a Form D?"
 You (PROSE — no tag): "Short version: any US company raising private money above ~$1M files one with the SEC within 15 days of the first sale. It tells you the company, the raise size, the security type, and the execs on the filing. It does NOT tell you investor names or valuation. Researchers love Form Ds because they surface stealth rounds before press releases. Anything specific you want to look into?"
@@ -802,14 +829,153 @@ const SECTORS = {
   },
 };
 
-// Main entry point
+// ──────────────────────────────────────────────────────────────────────────
+// KNOWN COMPANY REGISTRY
+// Maps common company aliases to their EDGAR CIK + privacy classification.
+// CIK lookup means we can use the submissions API for clean filing history
+// instead of full-text search (which returns noise from unrelated filers).
+//
+// "private" = company itself doesn't file (Anthropic, OpenAI). SPV trail
+//             is the right view.
+// "public"  = company files its own 10-K/10-Q/8-K/etc. Use submissions API.
+// "hybrid"  = some filings (Stripe has a $694M Other; SpaceX files Form Ds
+//             directly). Try submissions API first, fall back to FTS.
+// ──────────────────────────────────────────────────────────────────────────
+
+const KNOWN_COMPANIES = {
+  // PUBLIC — use submissions API for clean filing list
+  'amazon':      { cik: '0000018724', display: 'Amazon.com, Inc.',     type: 'public' },
+  'apple':       { cik: '0000320193', display: 'Apple Inc.',           type: 'public' },
+  'microsoft':   { cik: '0000789019', display: 'Microsoft Corporation', type: 'public' },
+  'tesla':       { cik: '0001318605', display: 'Tesla, Inc.',          type: 'public' },
+  'nvidia':      { cik: '0001045810', display: 'NVIDIA Corporation',   type: 'public' },
+  'alphabet':    { cik: '0001652044', display: 'Alphabet Inc.',        type: 'public' },
+  'google':      { cik: '0001652044', display: 'Alphabet Inc.',        type: 'public' },
+  'meta':        { cik: '0001326801', display: 'Meta Platforms, Inc.', type: 'public' },
+  'facebook':    { cik: '0001326801', display: 'Meta Platforms, Inc.', type: 'public' },
+  'netflix':     { cik: '0001065280', display: 'Netflix, Inc.',        type: 'public' },
+  'salesforce':  { cik: '0001108524', display: 'Salesforce, Inc.',     type: 'public' },
+  'palantir':    { cik: '0001321655', display: 'Palantir Technologies', type: 'public' },
+  'snowflake':   { cik: '0001640147', display: 'Snowflake Inc.',       type: 'public' },
+  'rivian':      { cik: '0001874178', display: 'Rivian Automotive',    type: 'public' },
+  'coinbase':    { cik: '0001679788', display: 'Coinbase Global, Inc.', type: 'public' },
+  'reddit':      { cik: '0001713445', display: 'Reddit, Inc.',         type: 'public' },
+  'roblox':      { cik: '0001315098', display: 'Roblox Corporation',   type: 'public' },
+  'datadog':     { cik: '0001561550', display: 'Datadog, Inc.',        type: 'public' },
+  'cloudflare':  { cik: '0001477333', display: 'Cloudflare, Inc.',     type: 'public' },
+  'crowdstrike': { cik: '0001535527', display: 'CrowdStrike Holdings', type: 'public' },
+  'oracle':      { cik: '0001341439', display: 'Oracle Corporation',   type: 'public' },
+  'ibm':         { cik: '0000051143', display: 'IBM',                  type: 'public' },
+  'intel':       { cik: '0000050863', display: 'Intel Corporation',    type: 'public' },
+  'amd':         { cik: '0000002488', display: 'Advanced Micro Devices', type: 'public' },
+  'berkshire':   { cik: '0001067983', display: 'Berkshire Hathaway',   type: 'public' },
+  'jpmorgan':    { cik: '0000019617', display: 'JPMorgan Chase',       type: 'public' },
+  'walmart':     { cik: '0000104169', display: 'Walmart Inc.',         type: 'public' },
+
+  // PRIVATE — SPV trail is the meaningful view; full-text search reveals it
+  'anthropic':   { display: 'Anthropic',          type: 'private' },
+  'openai':      { display: 'OpenAI',             type: 'private' },
+  'databricks':  { display: 'Databricks',         type: 'private' },
+  'canva':       { display: 'Canva',              type: 'private' },
+  'discord':     { display: 'Discord',            type: 'private' },
+  'plaid':       { display: 'Plaid',              type: 'private' },
+  'epic games':  { display: 'Epic Games',         type: 'private' },
+  'klarna':      { display: 'Klarna',             type: 'private' },
+  'instacart':   { display: 'Maplebear (Instacart)', type: 'private' },
+  'mistral':     { display: 'Mistral AI',         type: 'private' },
+  'perplexity':  { display: 'Perplexity AI',      type: 'private' },
+  'figma':       { display: 'Figma',              type: 'private' },
+  'notion':      { display: 'Notion',             type: 'private' },
+  'scale':       { display: 'Scale AI',           type: 'private' },
+  'scale ai':    { display: 'Scale AI',           type: 'private' },
+  'cohere':      { display: 'Cohere',             type: 'private' },
+  'character':   { display: 'Character.AI',       type: 'private' },
+  'character ai':{ display: 'Character.AI',       type: 'private' },
+  'xai':         { display: 'xAI',                type: 'private' },
+  'x.ai':        { display: 'xAI',                type: 'private' },
+  'safe superintelligence': { display: 'Safe Superintelligence', type: 'private' },
+  'ssi':         { display: 'Safe Superintelligence', type: 'private' },
+
+  // HYBRID — files some Form Ds itself, but third parties also file
+  'stripe':      { cik: '0001621039', display: 'Stripe, Inc.',         type: 'hybrid' },
+  'spacex':      { display: 'SpaceX',              type: 'hybrid' },
+};
+
+// Filer-name suffixes/words that flag a non-operating-company (fund, trust, etc.)
+// Used to filter sector queries so we don't surface Brookfield Infrastructure
+// Funds when someone asks for "AI startup raises".
+const NON_OPERATING_PATTERNS = [
+  /\bL\.?P\.?\s*$/i,                                    // ends in LP / L.P.
+  /\bfund\b/i,                                          // contains "Fund"
+  /\bcapital\s+(partners|management|fund)\b/i,
+  /\bholdings\s+(fund|trust)\b/i,
+  /\btrust\s*$/i,                                       // ends in Trust
+  /\bmortgage\b/i,                                      // mortgage trusts
+  /\bMBS\b/,                                            // mortgage-backed securities
+  /\bCMBS\b/,
+  /\bABS\b/,
+  /\bCDO\b/,
+  /\bCLO\b/,
+  /\b(20\d{2})-[A-Z]+\d*\s+Mortgage/i,                  // "2014-CCRE15 Mortgage"
+  /^BANK\s+\d{4}-/i,                                    // "BANK 2017-BNK6"
+  /^BENCHMARK\s+\d{4}-/i,
+  /^COMM\s+\d{4}-/i,
+];
+
+function isNonOperatingFiler(filerName) {
+  if (!filerName) return false;
+  return NON_OPERATING_PATTERNS.some(re => re.test(filerName));
+}
+
+function lookupKnownCompany(companyName) {
+  if (!companyName) return null;
+  const norm = String(companyName).trim().toLowerCase();
+  // Exact match first
+  if (KNOWN_COMPANIES[norm]) return { ...KNOWN_COMPANIES[norm], norm };
+  // Prefix match for inputs like "amazon.com" → "amazon"
+  for (const key of Object.keys(KNOWN_COMPANIES)) {
+    if (norm.startsWith(key + ' ') || norm.startsWith(key + '.') || norm.startsWith(key + ',')) {
+      return { ...KNOWN_COMPANIES[key], norm };
+    }
+  }
+  return null;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// MAIN ENTRY POINT — routes to the right EDGAR endpoint per query type
+// ──────────────────────────────────────────────────────────────────────────
+
 async function fetchData(params) {
   const { company, sector, form_type, min_amount, state, date_after, date_before } = params || {};
 
   try {
-    // Path 1: Specific company query (use submissions API for clean filing history)
     if (company && company.trim()) {
-      return await fetchCompanyFilings({
+      const known = lookupKnownCompany(company);
+      console.log('[route]', JSON.stringify({ company, known: known?.type || 'unknown' }));
+
+      // PUBLIC company query → submissions API for clean filing history
+      if (known?.type === 'public') {
+        return await fetchPublicCompanyFilings({
+          known,
+          formType: form_type,
+          dateAfter: date_after,
+          dateBefore: date_before,
+        });
+      }
+
+      // PRIVATE company query → full-text search for SPV trail
+      if (known?.type === 'private') {
+        return await fetchPrivateCompanyFilings({
+          companyName: known.display,
+          companyAlias: company,
+          formType: form_type,
+          dateAfter: date_after,
+          dateBefore: date_before,
+        });
+      }
+
+      // HYBRID or unknown → try full-text search with smart SPV detection
+      return await fetchUnknownCompanyFilings({
         companyName: company,
         formType: form_type,
         dateAfter: date_after,
@@ -817,7 +983,7 @@ async function fetchData(params) {
       });
     }
 
-    // Path 2: Sector or form-type or generic search (use full-text search)
+    // No company → sector / form-type / generic search
     return await fetchFilingsSearch({
       sector,
       formType: form_type || (sector ? 'D' : null),
@@ -833,23 +999,186 @@ async function fetchData(params) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// COMPANY-MODE FETCH — uses EDGAR full-text search to handle SPVs and aliases
-// (the submissions API only returns the company's own filings, missing the
-//  SPV trail that's the killer demo for names like "Anthropic")
+// PUBLIC COMPANY FETCH — uses submissions API for clean filing history
+// (no SPV noise, no mortgage trusts, just the company's own filings)
 // ──────────────────────────────────────────────────────────────────────────
 
-async function fetchCompanyFilings({ companyName, formType, dateAfter, dateBefore }) {
-  // Build the search URL — use full-text search since it returns SPV filings
-  // that name-match against the company name in their filer entity name.
+async function fetchPublicCompanyFilings({ known, formType, dateAfter, dateBefore }) {
+  // CIK must be 10 digits, zero-padded
+  const cik = String(known.cik).padStart(10, '0');
+  const url = `${EDGAR_DATA}/submissions/CIK${cik}.json`;
+  console.log('[edgar]', JSON.stringify({ mode: 'public_company', url, company: known.display }));
+
+  const data = await fetchEdgar(url);
+  const recent = data?.filings?.recent;
+
+  if (!recent || !recent.accessionNumber || recent.accessionNumber.length === 0) {
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: known.display,
+        message: `No filings found for ${known.display} via the submissions API.`,
+      },
+    };
+  }
+
+  // Build rows from parallel arrays
+  const rawRows = [];
+  for (let i = 0; i < recent.accessionNumber.length; i++) {
+    rawRows.push({
+      filer_name: known.display,
+      cik: cik,
+      form_type: recent.form[i],
+      filed_date: recent.filingDate[i],
+      amount: null,  // submissions API doesn't carry offering amount
+      state_of_inc: data.stateOfIncorporation || null,
+      accession: recent.accessionNumber[i],
+      doc_link: buildEdgarDocLink(cik, recent.accessionNumber[i], recent.primaryDocument[i]),
+    });
+  }
+
+  // Apply form_type filter
+  let rows = formType
+    ? rawRows.filter(r => r.form_type === formType || r.form_type.startsWith(formType + '/'))
+    : rawRows;
+
+  // Apply date filters (post-filter)
+  if (dateAfter) rows = rows.filter(r => r.filed_date && r.filed_date >= dateAfter);
+  if (dateBefore) rows = rows.filter(r => r.filed_date && r.filed_date <= dateBefore);
+
+  if (rows.length === 0) {
+    const filterSummary = [
+      formType ? `Form ${formType}` : null,
+      dateAfter ? `since ${dateAfter}` : null,
+      dateBefore ? `through ${dateBefore}` : null,
+    ].filter(Boolean).join(' · ');
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: `${known.display}${filterSummary ? ` · ${filterSummary}` : ''}`,
+        message: `${known.display} has no filings matching those filters. Try widening the date range or removing form_type.`,
+      },
+    };
+  }
+
+  // Sort newest first, take top 50
+  rows.sort((a, b) => (b.filed_date || '').localeCompare(a.filed_date || ''));
+  const shown = rows.slice(0, 50);
+
+  return {
+    card: {
+      kind: 'company_filings',
+      company: known.display,
+      total: rows.length,
+      shown: shown.length,
+      filters: {
+        form_type: formType || null,
+        date_after: dateAfter || null,
+        date_before: dateBefore || null,
+      },
+      rows: shown,
+      groups: null,
+      is_spv_trail: false,
+    },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// PRIVATE COMPANY FETCH — full-text search, expects SPV trail by default
+// ──────────────────────────────────────────────────────────────────────────
+
+async function fetchPrivateCompanyFilings({ companyName, companyAlias, formType, dateAfter, dateBefore }) {
+  const params = new URLSearchParams();
+  params.set('q', `"${companyAlias || companyName}"`);
+  if (formType) params.set('forms', formType);
+  if (dateAfter) {
+    params.set('dateRange', 'custom');
+    params.set('startdt', dateAfter);
+  }
+  if (dateBefore) {
+    params.set('dateRange', 'custom');
+    params.set('enddt', dateBefore);
+  }
+
+  const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+  console.log('[edgar]', JSON.stringify({ mode: 'private_company', url, companyName }));
+
+  const data = await fetchEdgar(url);
+  const hits = data?.hits?.hits || [];
+
+  if (hits.length === 0) {
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: `${companyName}${formType ? ` · ${formType}` : ''}`,
+        message: `Nothing in EDGAR for "${companyName}". Could be too early — or they're using exempt vehicles that don't surface here.`,
+      },
+    };
+  }
+
+  let rows = hits.map(h => parseFiling(h, companyName));
+
+  // Enforce date filters on rows
+  if (dateAfter) rows = rows.filter(r => r.filed_date && r.filed_date >= dateAfter);
+  if (dateBefore) rows = rows.filter(r => r.filed_date && r.filed_date <= dateBefore);
+
+  if (rows.length === 0) {
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: `${companyName}${formType ? ` · ${formType}` : ''}${dateAfter ? ` · since ${dateAfter}` : ''}`,
+        message: `No filings for ${companyName} match those filters. Try widening the date range.`,
+      },
+    };
+  }
+
+  // SPV trail mode: Always group for known-private companies if there are
+  // 5+ filings (because the whole point is the SPV trail, even with a small set)
+  const groups = rows.length >= 5 ? groupByFilerFamily(rows) : null;
+  const totalRaw = data?.hits?.total?.value || rows.length;
+  const total = totalRaw >= 10000 ? rows.length : Math.min(totalRaw, rows.length);
+
+  return {
+    card: {
+      kind: 'company_filings',
+      company: companyName,
+      total: total,
+      shown: rows.length,
+      total_capped: totalRaw >= 10000,
+      filters: {
+        form_type: formType || null,
+        date_after: dateAfter || null,
+        date_before: dateBefore || null,
+      },
+      rows,
+      groups,
+      is_spv_trail: !!groups,
+    },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// UNKNOWN COMPANY FETCH — full-text search, with smart SPV detection
+// SPV mode fires only if the named entity isn't in the top filers (i.e. third
+// parties are the ones filing). If the company files its own filings, this
+// is a normal filing-list view, not an SPV trail.
+// ──────────────────────────────────────────────────────────────────────────
+
+async function fetchUnknownCompanyFilings({ companyName, formType, dateAfter, dateBefore }) {
   const params = new URLSearchParams();
   params.set('q', `"${companyName}"`);
   if (formType) params.set('forms', formType);
-  if (dateAfter) params.set('dateRange', 'custom');
-  if (dateAfter) params.set('startdt', dateAfter);
-  if (dateBefore) params.set('enddt', dateBefore);
+  if (dateAfter) {
+    params.set('dateRange', 'custom');
+    params.set('startdt', dateAfter);
+  }
+  if (dateBefore) {
+    params.set('dateRange', 'custom');
+    params.set('enddt', dateBefore);
+  }
 
   const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
-  console.log('[edgar]', JSON.stringify({ mode: 'company', url, companyName }));
+  console.log('[edgar]', JSON.stringify({ mode: 'unknown_company', url, companyName }));
 
   const data = await fetchEdgar(url);
   const hits = data?.hits?.hits || [];
@@ -864,25 +1193,55 @@ async function fetchCompanyFilings({ companyName, formType, dateAfter, dateBefor
     };
   }
 
-  // Parse hits into rows
-  const rows = hits.map(h => parseFiling(h, companyName));
+  let rows = hits.map(h => parseFiling(h, companyName));
 
-  // Detect if this is the "SPV trail" case — many filings, mostly by different
-  // entities, all referencing the same company. If so, group by filer family.
+  // Enforce date filters on rows (EDGAR's date param sometimes leaks)
+  if (dateAfter) rows = rows.filter(r => r.filed_date && r.filed_date >= dateAfter);
+  if (dateBefore) rows = rows.filter(r => r.filed_date && r.filed_date <= dateBefore);
+
+  // Drop non-operating-company noise (mortgage trusts, etc.) — only if there's
+  // at least ONE row that matches the company name, otherwise we'd erase
+  // legitimate searches for fund-style names.
+  const lowerCompany = companyName.toLowerCase();
+  const hasNamedMatch = rows.some(r => r.filer_name.toLowerCase().includes(lowerCompany));
+  if (hasNamedMatch) {
+    rows = rows.filter(r => !isNonOperatingFiler(r.filer_name));
+  }
+
+  if (rows.length === 0) {
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: `${companyName}${formType ? ` · ${formType}` : ''}`,
+        message: `No relevant filings for "${companyName}" after filtering out unrelated funds and trusts.`,
+      },
+    };
+  }
+
+  // Smart SPV detection — only fire if the named entity isn't dominant in top filers
+  const topFilerName = rows[0]?.filer_name?.toLowerCase() || '';
+  const namedEntityIsTopFiler = topFilerName.includes(lowerCompany);
   const uniqueFilers = new Set(rows.map(r => r.filer_name)).size;
-  const isSpvTrail = rows.length > 10 && uniqueFilers > 5;
+
+  // SPV trail only if: 10+ filings, 5+ unique filers, AND the named company
+  // isn't the dominant filer (which would mean they ARE filing themselves)
+  const isSpvTrail = rows.length >= 10 && uniqueFilers >= 5 && !namedEntityIsTopFiler;
 
   let groups = null;
   if (isSpvTrail) {
     groups = groupByFilerFamily(rows);
   }
 
+  const totalRaw = data?.hits?.total?.value || rows.length;
+  const total = totalRaw >= 10000 ? rows.length : Math.min(totalRaw, rows.length);
+
   return {
     card: {
       kind: 'company_filings',
       company: companyName,
-      total: data?.hits?.total?.value || rows.length,
+      total: total,
       shown: rows.length,
+      total_capped: totalRaw >= 10000,
       filters: {
         form_type: formType || null,
         date_after: dateAfter || null,
@@ -893,6 +1252,22 @@ async function fetchCompanyFilings({ companyName, formType, dateAfter, dateBefor
       is_spv_trail: isSpvTrail,
     },
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// EDGAR DOC LINK BUILDER — direct links to filing documents
+// ──────────────────────────────────────────────────────────────────────────
+
+function buildEdgarDocLink(cik, accession, primaryDoc) {
+  if (!cik || !accession) return `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
+  // Strip leading zeros for the directory path; submission accession needs dashes removed for path
+  const cikInt = parseInt(cik, 10);
+  const accNoDashes = String(accession).replace(/-/g, '');
+  if (primaryDoc) {
+    return `${EDGAR_BASE}/Archives/edgar/data/${cikInt}/${accNoDashes}/${primaryDoc}`;
+  }
+  // Fall back to the filing index page
+  return `${EDGAR_BASE}/Archives/edgar/data/${cikInt}/${accNoDashes}/`;
 }
 
 // Group filings into filer "families" (Hiive, Augurey, Linqto etc.)
@@ -977,11 +1352,13 @@ function detectFilerFamily(filerName) {
 async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfter, dateBefore }) {
   const params = new URLSearchParams();
 
-  // Build query
+  // Build query — narrower phrasing for sector queries to reduce noise
   const queryParts = [];
   if (sector && SECTORS[sector]) {
     const sectorDef = SECTORS[sector];
-    queryParts.push(sectorDef.keywords.map(k => `"${k}"`).join(' OR '));
+    // Use the most distinctive keywords (shorter list = fewer false positives)
+    const distinctive = sectorDef.keywords.slice(0, 5);
+    queryParts.push(distinctive.map(k => `"${k}"`).join(' OR '));
   }
 
   if (queryParts.length > 0) {
@@ -1003,6 +1380,15 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
 
   const data = await fetchEdgar(url);
   let rows = (data?.hits?.hits || []).map(h => parseFiling(h, null));
+  const rawCount = rows.length;
+  const totalRaw = data?.hits?.total?.value || rawCount;
+
+  // Enforce date filters on rows (EDGAR sometimes leaks pre-date results)
+  if (dateAfter) rows = rows.filter(r => r.filed_date && r.filed_date >= dateAfter);
+  if (dateBefore) rows = rows.filter(r => r.filed_date && r.filed_date <= dateBefore);
+
+  // Drop fund/trust/mortgage noise — these are NOT operating-company raises
+  rows = rows.filter(r => !isNonOperatingFiler(r.filer_name));
 
   // Apply min_amount filter (post-fetch since EDGAR doesn't support it directly)
   if (minAmount) {
@@ -1019,17 +1405,25 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
       card: {
         kind: 'no_data',
         query_summary: buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }),
-        message: 'No filings matched those filters. Try widening the date range, removing the amount filter, or checking back later — Form Ds run on a 15-day filing window.',
+        message: 'No operating-company filings matched those filters after dropping funds and trusts. Try widening the date range, removing the amount filter, or checking back — Form Ds run on a 15-day filing window.',
       },
     };
   }
+
+  // Sort newest first
+  rows.sort((a, b) => (b.filed_date || '').localeCompare(a.filed_date || ''));
+
+  // Honest total: if EDGAR capped at 10000, show the post-filter count, not the cap
+  const totalCapped = totalRaw >= 10000;
+  const total = totalCapped ? rows.length : Math.min(totalRaw, rows.length);
 
   return {
     card: {
       kind: 'filings_list',
       query_summary: buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }),
-      total: data?.hits?.total?.value || rows.length,
+      total: total,
       shown: rows.length,
+      total_capped: totalCapped,
       filters: {
         sector: sector ? { key: sector, display: SECTORS[sector]?.display } : null,
         form_type: formType || null,
@@ -1038,7 +1432,7 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
         date_after: dateAfter || null,
         date_before: dateBefore || null,
       },
-      rows: rows.slice(0, 100),
+      rows: rows.slice(0, 50),
     },
   };
 }
