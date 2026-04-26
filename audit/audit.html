@@ -270,6 +270,7 @@ async function runAudit(audit, container) {
       <div class="audit-result">
         <div class="audit-result-line"><span class="audit-result-key">EDGAR total hits</span><span class="audit-result-val">${totalRaw}${totalRaw >= 10000 ? ' (capped)' : ''}</span></div>
         <div class="audit-result-line"><span class="audit-result-key">Returned in batch</span><span class="audit-result-val">${returned}</span></div>
+        ${data.filtered.dropped_date_count ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: outside date range</span><span class="audit-result-val">${data.filtered.dropped_date_count}</span></div>` : ''}
         <div class="audit-result-line"><span class="audit-result-key">Dropped: non-operating filers</span><span class="audit-result-val">${droppedNonOp}</span></div>
         ${audit.min_amount ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: below $${(audit.min_amount/1_000_000).toFixed(0)}M or no amount</span><span class="audit-result-val">${droppedAmt}</span></div>` : ''}
         ${audit.state ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: not ${escapeHtml(audit.state)}</span><span class="audit-result-val">${droppedSt}</span></div>` : ''}
