@@ -838,31 +838,60 @@ const handleAudit = async (responseStream, body) => {
       return;
     }
 
-    // Build the EDGAR full-text search URL from params
+    // Build the EDGAR full-text search URL — strip 'hits' if present, we manage it
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(edgar_params)) {
+      if (k === 'hits' || k === 'from') continue;
       if (v !== null && v !== undefined && v !== '') params.set(k, String(v));
     }
-    if (!params.has('hits')) params.set('hits', '100');
 
-    const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}`;
-    console.log('[audit]', JSON.stringify({ url }));
+    const baseUrl = `${SEC_BASE}/LATEST/search-index?${params.toString()}`;
+    const dateAfter = edgar_params.startdt;
+    const dateBefore = edgar_params.enddt;
+
+    // Paginate the same way fetchFilingsSearch does
+    const MAX_PAGES = 5;
+    let totalRaw = 0;
+    let allRows = [];
+    let pagesFetched = 0;
+    let stopReason = '';
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const pageUrl = `${baseUrl}&hits=100&from=${page * 100}`;
+      const pageData = await fetchEdgar(pageUrl);
+      pagesFetched++;
+      if (page === 0) {
+        totalRaw = pageData?.hits?.total?.value || 0;
+      }
+      const pageHits = pageData?.hits?.hits || [];
+      if (pageHits.length === 0) {
+        stopReason = 'no more pages';
+        break;
+      }
+      allRows.push(...pageHits.map(h => parseFiling(h, null)));
+      if (pageHits.length < 100) {
+        stopReason = 'partial page (end of results)';
+        break;
+      }
+    }
+    if (!stopReason) stopReason = `hit MAX_PAGES (${MAX_PAGES})`;
+
+    const url = baseUrl + '&hits=100';  // for display only
+    console.log('[audit]', JSON.stringify({ url, pagesFetched, allRowsCount: allRows.length }));
 
     const data = await fetchEdgar(url);
     const hits = data?.hits?.hits || [];
-    const totalRaw = data?.hits?.total?.value || hits.length;
+    const totalRawFromAPI = totalRaw;
 
-    // Parse rows the same way Mo does
-    const rows = hits.map(h => parseFiling(h, null));
+    // Use rows from pagination
+    const rows = allRows;
 
     // Apply Mo's filter pipeline IN ORDER, mirroring fetchFilingsSearch:
     //   1. date_after / date_before
     //   2. non-operating filers
-    //   3. min_amount
+    //   3. min_amount (smart: keep unknowns separately)
     //   4. state
     let surviving = [...rows];
-    const dateAfter = edgar_params.startdt;
-    const dateBefore = edgar_params.enddt;
 
     let droppedDate = [];
     if (dateAfter) {
@@ -877,11 +906,17 @@ const handleAudit = async (responseStream, body) => {
     const droppedNonOperating = surviving.filter(r => isNonOperatingFiler(r.filer_name));
     surviving = surviving.filter(r => !isNonOperatingFiler(r.filer_name));
 
+    // Smart amount filter: track known vs unknown separately so audit reflects
+    // production behavior (unknowns are KEPT in production, just labeled)
     let droppedAmount = [];
+    let unknownAmount = [];
     if (min_amount) {
       const minAmt = parseInt(min_amount, 10);
-      droppedAmount = surviving.filter(r => !r.amount || r.amount < minAmt);
-      surviving = surviving.filter(r => r.amount && r.amount >= minAmt);
+      droppedAmount = surviving.filter(r => r.amount && r.amount < minAmt);
+      unknownAmount = surviving.filter(r => !r.amount);
+      // In production we KEEP unknowns. Audit should reflect that. Only drop
+      // rows where amount is known AND below threshold.
+      surviving = surviving.filter(r => !r.amount || r.amount >= minAmt);
     }
 
     let droppedState = [];
@@ -892,8 +927,10 @@ const handleAudit = async (responseStream, body) => {
 
     writeJsonResponse(responseStream, 200, {
       raw: {
-        total: totalRaw,
+        total: totalRawFromAPI,
         returned: rows.length,
+        pages_fetched: pagesFetched,
+        stop_reason: stopReason,
         sample: rows.slice(0, 10),
       },
       filtered: {
@@ -903,6 +940,8 @@ const handleAudit = async (responseStream, body) => {
         dropped_non_operating_sample: droppedNonOperating.slice(0, 5),
         dropped_amount_count: droppedAmount.length,
         dropped_amount_sample: droppedAmount.slice(0, 5),
+        unknown_amount_count: unknownAmount.length,
+        unknown_amount_sample: unknownAmount.slice(0, 5),
         dropped_state_count: droppedState.length,
         dropped_state_sample: droppedState.slice(0, 5),
         survived_count: surviving.length,
@@ -1600,13 +1639,57 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
     params.set('enddt', dateBefore);
   }
 
-  const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
-  console.log('[edgar]', JSON.stringify({ mode: 'search', url, sector, formType }));
+  // EDGAR full-text search returns results sorted by relevance, not date.
+  // For sector queries with date filters, the top relevance hits are often
+  // OLD filings unrelated to current activity. So we paginate up to 5 pages
+  // (500 results) and apply date filters across all pages, stopping early
+  // once we have enough date-matching results.
+  //
+  // We collect:
+  //   - All rows that match the date filter (these are what we'll show)
+  //   - Total raw count from EDGAR (for honest reporting)
+  const baseUrl = `${SEC_BASE}/LATEST/search-index?${params.toString()}`;
+  const MAX_PAGES = 5;
+  const TARGET_DATE_MATCHES = 100;
+  let collectedDateMatches = [];
+  let totalRaw = 0;
+  let pagesActuallyFetched = 0;
 
-  const data = await fetchEdgar(url);
-  let rows = (data?.hits?.hits || []).map(h => parseFiling(h, null));
-  const rawCount = rows.length;
-  const totalRaw = data?.hits?.total?.value || rawCount;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const from = page * 100;
+    const url = `${baseUrl}&hits=100&from=${from}`;
+    console.log('[edgar]', JSON.stringify({ mode: 'search', page, url, sector, formType }));
+
+    const data = await fetchEdgar(url);
+    if (page === 0) {
+      totalRaw = data?.hits?.total?.value || 0;
+    }
+    const pageHits = data?.hits?.hits || [];
+    pagesActuallyFetched++;
+    if (pageHits.length === 0) break;
+
+    const pageRows = pageHits.map(h => parseFiling(h, null));
+
+    // Apply date filter to this page only
+    let pageDateMatches = pageRows;
+    if (dateAfter) pageDateMatches = pageDateMatches.filter(r => r.filed_date && r.filed_date >= dateAfter);
+    if (dateBefore) pageDateMatches = pageDateMatches.filter(r => r.filed_date && r.filed_date <= dateBefore);
+
+    collectedDateMatches.push(...pageDateMatches);
+
+    // Stop early if we have enough
+    if (collectedDateMatches.length >= TARGET_DATE_MATCHES) break;
+    // Stop if EDGAR returned fewer than a full page (no more data)
+    if (pageHits.length < 100) break;
+  }
+
+  let rows = collectedDateMatches;
+  console.log('[edgar]', JSON.stringify({
+    sector, formType,
+    pages_fetched: pagesActuallyFetched,
+    total_raw: totalRaw,
+    date_matches: collectedDateMatches.length,
+  }));
 
   // Enforce date filters on rows (EDGAR sometimes leaks pre-date results)
   if (dateAfter) rows = rows.filter(r => r.filed_date && r.filed_date >= dateAfter);
@@ -1760,11 +1843,23 @@ function parseFiling(hit, contextCompanyName) {
 }
 
 function cleanFilerName(raw) {
-  // EDGAR display names sometimes include  "(0001234567) (Filer)" suffix
-  return String(raw)
-    .replace(/\s*\(\d+\)\s*\(Filer\)\s*$/, '')
-    .replace(/\s*\(\d+\)\s*$/, '')
-    .trim();
+  // EDGAR display names include suffixes like:
+  //   "Foo Corp  (CIK 0001234567) (Filer)"
+  //   "Foo Corp (CIK 0001234567)"
+  //   "Foo Corp (FOO)  (CIK 0001234567)"
+  //   "Foo Corp (0001234567) (Filer)" (rare older format)
+  // Strip ALL trailing parenthesized groups so the L.P./Fund/Trust regex
+  // patterns can match on the actual entity name's tail.
+  let cleaned = String(raw);
+  // Drop "(Filer)" suffix
+  cleaned = cleaned.replace(/\s*\(Filer\)\s*$/i, '');
+  // Drop "(CIK 0001234567)" or "(0001234567)" suffix(es), possibly multiple
+  while (/\s*\(\s*(?:CIK\s+)?\d+\s*\)\s*$/.test(cleaned)) {
+    cleaned = cleaned.replace(/\s*\(\s*(?:CIK\s+)?\d+\s*\)\s*$/, '');
+  }
+  // Drop trailing ticker symbol "(MSFT)" — short uppercase only
+  cleaned = cleaned.replace(/\s*\([A-Z]{1,5}(?:\s+[A-Z]{1,5})*\)\s*$/, '');
+  return cleaned.trim();
 }
 
 // ──────────────────────────────────────────────────────────────────────────
