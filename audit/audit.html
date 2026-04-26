@@ -214,8 +214,12 @@ async function runAudit(audit, container) {
 
     const totalRaw = data.raw.total;
     const returned = data.raw.returned;
+    const pagesFetched = data.raw.pages_fetched || 1;
+    const stopReason = data.raw.stop_reason || '';
+    const droppedDate = data.filtered.dropped_date_count || 0;
     const droppedNonOp = data.filtered.dropped_non_operating_count;
     const droppedAmt = data.filtered.dropped_amount_count;
+    const unknownAmt = data.filtered.unknown_amount_count || 0;
     const droppedSt = data.filtered.dropped_state_count;
     const survived = data.filtered.survived_count;
 
@@ -225,19 +229,19 @@ async function runAudit(audit, container) {
     let statusText;
 
     if (survived > 0) {
-      verdict = `<div class="verdict over-filtered"><strong>OVER-FILTERED.</strong> EDGAR returned ${totalRaw} hits, ${returned} in this batch, and ${survived} survived all filters. Mo should have shown these. The non-operating filter or the no_data threshold is too aggressive.</div>`;
-      statusClass = 'done-suspicious';
-      statusText = 'Over-filtered';
+      verdict = `<div class="verdict honest"><strong>Mo will show ${survived} filings</strong>${unknownAmt > 0 ? ` (${unknownAmt} with undisclosed amounts).` : '.'} EDGAR returned ${totalRaw} total hits across ${pagesFetched} pages. Smart amount filter is keeping unknowns instead of dropping them.</div>`;
+      statusClass = 'done-honest';
+      statusText = 'Returns data';
     } else if (returned === 0) {
-      verdict = `<div class="verdict honest"><strong>Genuinely empty.</strong> EDGAR returned 0 hits for this query. Mo's no_data was correct. The sector keyword search just didn't match anything in EDGAR's index.</div>`;
+      verdict = `<div class="verdict honest"><strong>Genuinely empty.</strong> EDGAR returned 0 hits across ${pagesFetched} pages. Mo's no_data is correct.</div>`;
       statusClass = 'done-honest';
       statusText = 'Genuinely empty';
-    } else if (audit.min_amount && droppedAmt > 0 && droppedAmt >= returned * 0.8) {
-      verdict = `<div class="verdict amount-issue"><strong>Amount filter is the killer.</strong> EDGAR had ${returned} matches but ${droppedAmt} were dropped because they have no offering_amount or fall below the threshold. Most Form Ds don't fill in offering_amount (it's optional). This is partly EDGAR data quality but Mo could be smarter — treating "amount unknown" differently from "amount below threshold."</div>`;
+    } else if (droppedDate > 0 && droppedDate >= returned * 0.95) {
+      verdict = `<div class="verdict over-filtered"><strong>EDGAR returned old data.</strong> ${returned} hits across ${pagesFetched} pages (total: ${totalRaw}), but ${droppedDate} were outside the date range. EDGAR FTS sorts by relevance not date — the recent filings are likely deeper than page ${pagesFetched}. Increasing MAX_PAGES may help.</div>`;
       statusClass = 'done-suspicious';
-      statusText = 'Amount filter killing results';
+      statusText = 'EDGAR FTS limitation';
     } else {
-      verdict = `<div class="verdict honest"><strong>Filtered out legitimately.</strong> EDGAR had ${returned} matches but all were dropped by the filter pipeline (${droppedNonOp} non-operating, ${droppedAmt} amount, ${droppedSt} state). Filters working as designed.</div>`;
+      verdict = `<div class="verdict honest"><strong>Filtered out legitimately.</strong> ${returned} EDGAR matches across ${pagesFetched} pages, all dropped by filters (${droppedDate} date, ${droppedNonOp} non-operating, ${droppedAmt} below amount, ${droppedSt} wrong state).</div>`;
       statusClass = 'done-honest';
       statusText = 'Correctly filtered';
     }
@@ -245,7 +249,7 @@ async function runAudit(audit, container) {
     const survivorsHtml = data.filtered.survived.slice(0, 5).map(r => `
       <div class="audit-sample-row">
         <div class="audit-sample-name">${escapeHtml(r.filer_name)}</div>
-        <div class="audit-sample-meta">${escapeHtml(r.form_type || '?')} · ${escapeHtml(r.filed_date || '?')}${r.amount ? ' · $' + (r.amount/1_000_000).toFixed(1) + 'M' : ''}${r.state_of_inc ? ' · ' + escapeHtml(r.state_of_inc) : ''}</div>
+        <div class="audit-sample-meta">${escapeHtml(r.form_type || '?')} · ${escapeHtml(r.filed_date || '?')}${r.amount ? ' · $' + (r.amount/1_000_000).toFixed(1) + 'M' : ' · undisclosed'}${r.state_of_inc ? ' · ' + escapeHtml(r.state_of_inc) : ''}</div>
       </div>
     `).join('');
 
@@ -259,7 +263,7 @@ async function runAudit(audit, container) {
     const droppedAmtHtml = data.filtered.dropped_amount_sample.slice(0, 5).map(r => `
       <div class="audit-sample-row">
         <div class="audit-sample-name">${escapeHtml(r.filer_name)}</div>
-        <div class="audit-sample-meta">${escapeHtml(r.form_type || '?')} · ${escapeHtml(r.filed_date || '?')} · ${r.amount ? '$' + (r.amount/1_000_000).toFixed(2) + 'M' : 'no amount'}</div>
+        <div class="audit-sample-meta">${escapeHtml(r.form_type || '?')} · ${escapeHtml(r.filed_date || '?')} · $${(r.amount/1_000_000).toFixed(2)}M</div>
       </div>
     `).join('');
 
@@ -269,17 +273,19 @@ async function runAudit(audit, container) {
     block.querySelector('.audit-result-slot').innerHTML = `
       <div class="audit-result">
         <div class="audit-result-line"><span class="audit-result-key">EDGAR total hits</span><span class="audit-result-val">${totalRaw}${totalRaw >= 10000 ? ' (capped)' : ''}</span></div>
-        <div class="audit-result-line"><span class="audit-result-key">Returned in batch</span><span class="audit-result-val">${returned}</span></div>
-        ${data.filtered.dropped_date_count ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: outside date range</span><span class="audit-result-val">${data.filtered.dropped_date_count}</span></div>` : ''}
+        <div class="audit-result-line"><span class="audit-result-key">Pages fetched</span><span class="audit-result-val">${pagesFetched} (${escapeHtml(stopReason)})</span></div>
+        <div class="audit-result-line"><span class="audit-result-key">Total rows collected</span><span class="audit-result-val">${returned}</span></div>
+        ${droppedDate > 0 ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: outside date range</span><span class="audit-result-val">${droppedDate}</span></div>` : ''}
         <div class="audit-result-line"><span class="audit-result-key">Dropped: non-operating filers</span><span class="audit-result-val">${droppedNonOp}</span></div>
-        ${audit.min_amount ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: below $${(audit.min_amount/1_000_000).toFixed(0)}M or no amount</span><span class="audit-result-val">${droppedAmt}</span></div>` : ''}
+        ${audit.min_amount ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: below $${(audit.min_amount/1_000_000).toFixed(0)}M</span><span class="audit-result-val">${droppedAmt}</span></div>` : ''}
+        ${audit.min_amount ? `<div class="audit-result-line"><span class="audit-result-key">Kept (undisclosed amount)</span><span class="audit-result-val">${unknownAmt}</span></div>` : ''}
         ${audit.state ? `<div class="audit-result-line"><span class="audit-result-key">Dropped: not ${escapeHtml(audit.state)}</span><span class="audit-result-val">${droppedSt}</span></div>` : ''}
         <div class="audit-result-line"><span class="audit-result-key"><strong>Survived all filters</strong></span><span class="audit-result-val"><strong>${survived}</strong></span></div>
       </div>
 
-      ${survived > 0 ? `<div class="audit-samples"><div class="audit-samples-title">Filings Mo should have shown</div>${survivorsHtml}</div>` : ''}
+      ${survived > 0 ? `<div class="audit-samples"><div class="audit-samples-title">Filings Mo will show</div>${survivorsHtml}</div>` : ''}
 
-      ${droppedAmt > 0 && audit.min_amount ? `<div class="audit-samples"><div class="audit-samples-title">Sample dropped by amount filter</div>${droppedAmtHtml}</div>` : ''}
+      ${droppedAmt > 0 && audit.min_amount ? `<div class="audit-samples"><div class="audit-samples-title">Sample dropped (below threshold)</div>${droppedAmtHtml}</div>` : ''}
 
       ${droppedNonOp > 0 ? `<div class="audit-samples"><div class="audit-samples-title">Sample dropped as non-operating</div>${droppedNonOpHtml}</div>` : ''}
 
