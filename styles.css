@@ -1,0 +1,691 @@
+/* ============================================================================
+   Mo's Visual Identity
+   ============================================================================
+   This is Mo's look and feel. Same across every Mo skill. Don't override
+   these in skill-specific code unless you genuinely need a different brand.
+   The visual consistency is part of what makes Mo recognizable.
+   ============================================================================ */
+
+:root {
+  /* ── Brand: purple primary, sage-green for Mo's face ── */
+  --primary-100: #46446E;
+  --primary-80:  #5E5B92;
+  --primary-60:  #7572B7;
+  --primary-40:  #ACAAD4;
+  --primary-20:  #E3E3F1;
+
+  /* Mo's face (used in SVG, also for accents if a skill leans green) */
+  --mo-green:        #7CB583;
+  --mo-green-dark:   #2D5033;
+
+  /* ── Type ── */
+  --black: #2C2933;
+  --white: #FFFBF2;
+  --text-title: #2C2933;
+  --text-body:  #2E2C35;
+  --text-muted: #4A475A;
+  --text-faint: #6C6880;
+
+  /* ── Surfaces ── */
+  --bg-screen: #FDFCFF;
+  --bg-card:   #FFFFFF;
+  --bg-tint:   #F6F5FB;
+  --border:      #E3E3F1;
+  --border-soft: #EFEEF7;
+
+  /* ── Spacing scale (4/8/12/16/20/24/32) ── */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  /* ── Radii ── */
+  --radius:    16px;
+  --radius-sm: 12px;
+  --radius-pill: 999px;
+
+  /* ── Effects ── */
+  --shadow-lift: 0 4px 16px rgba(70,68,110,0.10);
+  --track-tight: -0.01em;
+
+  /* ── Type stack ── */
+  --font: 'Atkinson Hyperlegible Next', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ============================================================================
+   Base
+   ============================================================================ */
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg-screen);
+  color: var(--text-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
+}
+
+/* Buttons get tap-only behavior; prose stays selectable so users can copy
+   weather data, location names, dates, etc. into other apps. */
+button,
+.mo-chip,
+.mo-card-action,
+.mo-header-action,
+.mo-pill,
+.mo-send,
+.mo-modal-close {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+button, input {
+  font-family: var(--font);
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* ============================================================================
+   Header
+   ============================================================================ */
+
+.mo-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg-screen);
+  padding: var(--s-3);
+  padding-top: calc(var(--s-3) + env(safe-area-inset-top));
+}
+
+.mo-header-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.mo-header-spacer {
+  flex: 1;
+}
+
+.mo-header-action {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  transition: background 120ms;
+}
+
+.mo-header-action:active {
+  background: var(--primary-20);
+  color: var(--primary-100);
+}
+
+/* ============================================================================
+   Main thread
+   ============================================================================ */
+
+#mo-main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 var(--s-3) var(--s-6);
+}
+
+.mo-thread {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================================
+   Greeting (shown before any conversation)
+   ============================================================================ */
+
+.greeting {
+  display: flex;
+  gap: var(--s-4);
+  align-items: flex-start;
+  padding: var(--s-5) var(--s-2);
+  margin-bottom: var(--s-5);
+}
+
+.greeting-face {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+}
+
+.greeting-intro-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.greeting-hi {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-title);
+  margin: 0 0 var(--s-2);
+  letter-spacing: var(--track-tight);
+}
+
+.greeting-sub {
+  font-size: 15px;
+  color: var(--text-body);
+  line-height: 1.45;
+  margin: 0 0 var(--s-4);
+}
+
+.greeting-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.greeting-example {
+  font-size: 13px;
+  padding: 6px 12px;
+  background: var(--primary-20);
+  color: var(--primary-100);
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  transition: background 120ms;
+}
+
+.greeting-example:active {
+  background: var(--primary-40);
+}
+
+/* ============================================================================
+   User turn (right-aligned purple bubble)
+   ============================================================================ */
+
+.turn-user {
+  display: flex;
+  justify-content: flex-end;
+  margin: var(--s-5) 0 var(--s-4);
+  animation: turnIn 240ms ease;
+}
+
+.turn-user-bubble {
+  max-width: 84%;
+  padding: var(--s-3) var(--s-4);
+  background: var(--primary-100);
+  color: var(--white);
+  border-radius: 16px 16px 4px 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ============================================================================
+   Mo turn (left-aligned, with face avatar)
+   ============================================================================ */
+
+.turn-mo {
+  margin: 0 0 var(--s-5);
+  animation: turnIn 320ms ease;
+  scroll-margin-top: 64px;
+}
+
+@keyframes turnIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.turn-mo-header {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-2);
+  padding-left: var(--s-1);
+}
+
+.turn-mo-header svg {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.turn-mo-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.turn-mo-prose {
+  padding: 0 var(--s-1);
+  line-height: 1.6;
+  color: var(--text-body);
+}
+
+.turn-mo-prose p {
+  margin: 0 0 var(--s-3);
+}
+
+.turn-mo-prose p:last-child {
+  margin-bottom: 0;
+}
+
+/* The data card itself */
+.turn-mo-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s-5);
+  margin: var(--s-3) 0;
+}
+
+/* The "Mo's interpretation" prose that follows the card */
+.turn-mo-after {
+  padding: 0 var(--s-1);
+  margin-top: var(--s-3);
+  line-height: 1.6;
+  color: var(--text-body);
+}
+
+.turn-mo-after p {
+  margin: 0 0 var(--s-3);
+}
+
+.turn-mo-after p:last-child {
+  margin-bottom: 0;
+}
+
+/* ============================================================================
+   Card content (skill-specific layouts plug in here)
+   ============================================================================ */
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 0 0 var(--s-3);
+  letter-spacing: var(--track-tight);
+}
+
+.card-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 var(--s-4);
+}
+
+.card-stat-row {
+  display: flex;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-4);
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.card-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.card-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-title);
+  letter-spacing: var(--track-tight);
+}
+
+.card-stat-label {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.card-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.card-row:last-child {
+  border-bottom: none;
+}
+
+.card-row-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-body);
+  min-width: 0;
+}
+
+.card-row-detail {
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.card-footer {
+  margin-top: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border-soft);
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.card-footer a {
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+.card-footer a:hover {
+  color: var(--primary-100);
+  text-decoration: underline;
+}
+
+/* No-data card variant */
+.card-no-data {
+  text-align: center;
+  padding: var(--s-5);
+}
+
+.card-no-data-icon {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto var(--s-3);
+  opacity: 0.5;
+}
+
+.card-no-data-message {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ============================================================================
+   Smart pills (post-card lateral suggestions)
+   ============================================================================ */
+
+.mo-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  padding: 0 var(--s-1);
+}
+
+.mo-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--s-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  color: var(--text-body);
+  font-weight: 500;
+  transition: background 120ms, border-color 120ms;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mo-pill:active {
+  background: var(--primary-20);
+  border-color: var(--primary-40);
+  color: var(--primary-100);
+}
+
+/* ============================================================================
+   Composer (sticky bottom input)
+   ============================================================================ */
+
+.mo-composer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: linear-gradient(
+    to bottom,
+    rgba(253, 252, 255, 0) 0%,
+    var(--bg-screen) 24px
+  );
+  padding: var(--s-3);
+  padding-bottom: calc(var(--s-3) + env(safe-area-inset-bottom));
+}
+
+.mo-composer-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: var(--s-1);
+  padding-left: var(--s-4);
+  box-shadow: var(--shadow-lift);
+}
+
+.mo-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  color: var(--text-body);
+  padding: var(--s-2) 0;
+  min-width: 0;
+}
+
+.mo-input:focus {
+  outline: none;
+}
+
+.mo-input::placeholder {
+  color: var(--text-faint);
+}
+
+.mo-send {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--primary-100);
+  color: var(--white);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 120ms;
+}
+
+.mo-send:active {
+  background: var(--primary-80);
+}
+
+.mo-send:disabled {
+  background: var(--primary-40);
+  cursor: not-allowed;
+}
+
+/* ============================================================================
+   Loading indicator (Mo "thinking" face)
+   ============================================================================ */
+
+.mo-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-1);
+  margin-bottom: var(--s-3);
+}
+
+.mo-loading svg {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1.0; }
+}
+
+.mo-loading-text {
+  font-size: 13px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ============================================================================
+   Modal (About / settings)
+   ============================================================================ */
+
+.mo-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-4);
+}
+
+.mo-modal[hidden] {
+  display: none;
+}
+
+.mo-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(44, 41, 51, 0.4);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 200ms ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.mo-modal-card {
+  position: relative;
+  z-index: 1;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: var(--s-6);
+  max-width: 480px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lift);
+  animation: modalIn 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.mo-modal-close {
+  position: absolute;
+  top: var(--s-3);
+  right: var(--s-3);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 20px;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.mo-modal-close:active {
+  background: var(--primary-20);
+  color: var(--primary-100);
+}
+
+.mo-modal-content h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-title);
+  margin: 0 0 var(--s-3);
+  letter-spacing: var(--track-tight);
+}
+
+.mo-modal-content p {
+  font-size: 14px;
+  color: var(--text-body);
+  line-height: 1.55;
+  margin: 0 0 var(--s-3);
+}
+
+.mo-modal-content a {
+  color: var(--primary-100);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.mo-modal-content a:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================================
+   Error state
+   ============================================================================ */
+
+.mo-error {
+  background: #FFF4F0;
+  border: 1px solid #F5C9B8;
+  border-radius: var(--radius-sm);
+  padding: var(--s-3) var(--s-4);
+  font-size: 14px;
+  color: #7A3520;
+  margin: var(--s-3) 0;
+}

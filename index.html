@@ -1,816 +1,108 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ed — SEC EDGAR research</title>
-<meta name="description" content="Ask Ed about SEC filings, Form D private raises, company disclosures. Live EDGAR data, built on the fly.">
-<link rel="preconnect" href="https://efts.sec.gov">
-<link rel="preconnect" href="https://data.sec.gov">
-<link rel="preconnect" href="https://www.sec.gov">
-<style>
-  :root {
-    --bg: #0f1014;
-    --surface: #181a22;
-    --surface-elev: #20232e;
-    --border: #2a2d3a;
-    --text: #e8e9ed;
-    --text-muted: #9498a5;
-    --text-faint: #6b6e7a;
-    --accent: #5eead4;         /* teal — different from Mo's purple */
-    --accent-dim: #2dd4bf;
-    --accent-bg: rgba(94, 234, 212, 0.1);
-    --danger: #f87171;
-    --warning: #fbbf24;
-    --radius: 8px;
-    --radius-pill: 999px;
-    --mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    min-height: 100vh;
-    padding-bottom: 120px;
-  }
-  .container {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 28px 20px 20px;
-  }
-  header { margin-bottom: 32px; }
-  .brand {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .brand .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 12px var(--accent);
-  }
-  .tagline {
-    color: var(--text-muted);
-    font-size: 14px;
-    margin-top: 6px;
-  }
-  .greeting {
-    margin-top: 40px;
-    font-size: 22px;
-    line-height: 1.4;
-  }
-  .greeting-sub {
-    color: var(--text-muted);
-    font-size: 15px;
-    margin-top: 8px;
-  }
-
-  /* Thread + turns */
-  .thread { margin-top: 24px; }
-  .turn { margin-bottom: 24px; }
-  .turn-user {
-    background: var(--surface-elev);
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--accent-dim);
-    margin-bottom: 8px;
-  }
-  .turn-user::before { content: '▸ '; color: var(--text-faint); }
-  .turn-ed {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 18px;
-  }
-  .prose { color: var(--text); }
-  .prose.streaming::after {
-    content: '▋';
-    color: var(--accent);
-    animation: blink 1s infinite;
-    margin-left: 2px;
-  }
-  @keyframes blink { 50% { opacity: 0; } }
-
-  /* Card */
-  .ed-card {
-    margin-top: 14px;
-    background: var(--surface-elev);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    position: relative;
-  }
-  .card-loading {
-    color: var(--text-faint);
-    font-size: 13px;
-    text-align: center;
-    padding: 24px;
-    font-family: var(--mono);
-  }
-  .card-loading::before { content: '◌ '; color: var(--accent); }
-
-  /* Form D result grid */
-  .formd-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-  }
-  .formd-count {
-    font-size: 13px;
-    color: var(--text-muted);
-    font-family: var(--mono);
-  }
-  .formd-count strong { color: var(--accent); }
-  .formd-source {
-    font-size: 11px;
-    color: var(--text-faint);
-  }
-  .formd-source a {
-    color: var(--text-faint);
-    text-decoration: underline dotted;
-  }
-  .formd-source a:hover { color: var(--accent); }
-
-  .formd-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  .formd-table th {
-    text-align: left;
-    font-weight: 600;
-    color: var(--text-muted);
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-  .formd-table td {
-    padding: 8px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  .formd-table tr:last-child td { border-bottom: none; }
-  .formd-table tr:hover { background: rgba(94, 234, 212, 0.04); }
-  .formd-entity {
-    font-weight: 600;
-    color: var(--text);
-    max-width: 360px;
-  }
-  .formd-entity-meta {
-    font-size: 11px;
-    color: var(--text-faint);
-    font-weight: 400;
-    margin-top: 2px;
-  }
-  .formd-amt {
-    font-family: var(--mono);
-    text-align: right;
-    color: var(--accent);
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .formd-amt.nil { color: var(--text-faint); font-weight: 400; }
-  .formd-date {
-    font-family: var(--mono);
-    color: var(--text-muted);
-    white-space: nowrap;
-    font-size: 12px;
-  }
-  .formd-state {
-    font-family: var(--mono);
-    color: var(--text-muted);
-    font-size: 11px;
-  }
-  .formd-industry {
-    font-size: 11px;
-    color: var(--text-faint);
-  }
-  .formd-link {
-    color: var(--accent);
-    text-decoration: none;
-    font-size: 11px;
-    font-family: var(--mono);
-  }
-  .formd-link:hover { text-decoration: underline; }
-
-  /* Company header (when mode=company) */
-  .company-header {
-    margin-bottom: 14px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--border);
-  }
-  .company-name {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text);
-  }
-  .company-cik {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-faint);
-  }
-  .company-meta {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 4px;
-  }
-  .fuzzy-warning {
-    background: rgba(251, 191, 36, 0.1);
-    border-left: 3px solid var(--warning);
-    padding: 8px 12px;
-    margin: 8px 0;
-    font-size: 12px;
-    color: var(--text);
-  }
-
-  /* Input bar */
-  .askbar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: linear-gradient(to top, var(--bg) 80%, transparent);
-    padding: 16px 20px 24px;
-    z-index: 100;
-  }
-  .askbar-inner {
-    max-width: 900px;
-    margin: 0 auto;
-    display: flex;
-    gap: 8px;
-  }
-  .askbar input {
-    flex: 1;
-    background: var(--surface-elev);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    font: inherit;
-    color: var(--text);
-    outline: none;
-    font-size: 15px;
-  }
-  .askbar input:focus { border-color: var(--accent); }
-  .askbar input::placeholder { color: var(--text-faint); }
-  .askbar button {
-    background: var(--accent);
-    color: var(--bg);
-    border: none;
-    border-radius: var(--radius);
-    padding: 0 20px;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 14px;
-  }
-  .askbar button:hover { background: var(--accent-dim); }
-  .askbar button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  /* Chips */
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 20px;
-  }
-  .chip {
-    background: var(--surface-elev);
-    color: var(--accent);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-pill);
-    padding: 6px 14px;
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .chip:hover { border-color: var(--accent); background: var(--accent-bg); }
-
-  /* Debug panel */
-  .ed-debug {
-    margin-top: 12px;
-    background: #000;
-    color: #7aa2f7;
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 10px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    white-space: pre-wrap;
-    max-height: 500px;
-    overflow: auto;
-  }
-  .ed-debug .k { color: var(--text-muted); }
-  .ed-debug .v { color: var(--accent-dim); }
-  .ed-debug-hint {
-    font-size: 10px;
-    color: var(--text-faint);
-    margin-top: 8px;
-    text-align: right;
-  }
-
-  /* Error state */
-  .ed-error {
-    background: rgba(248, 113, 113, 0.1);
-    border-left: 3px solid var(--danger);
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    color: var(--text);
-    font-size: 13px;
-  }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#46446E">
+  <title>Mo</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%237CB583'/%3E%3Ccircle cx='14' cy='16' r='2.4' fill='%232D5033'/%3E%3Ccircle cx='26' cy='16' r='2.4' fill='%232D5033'/%3E%3Cpath d='M12 24 Q20 31 28 24' stroke='%232D5033' stroke-width='2.8' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<div class="container">
-  <header>
-    <div class="brand"><span class="dot"></span> Ed</div>
-    <div class="tagline">SEC EDGAR, in plain English.</div>
-  </header>
+<!-- Mo's three faces — used as <use href="#icon-face-open"> etc. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="icon-face-open" viewBox="0 0 40 40">
+    <circle cx="20" cy="20" r="20" fill="#7CB583"/>
+    <circle cx="14" cy="16" r="2.4" fill="#2D5033"/>
+    <circle cx="26" cy="16" r="2.4" fill="#2D5033"/>
+    <path d="M12 24 Q20 31 28 24" fill="none" stroke="#2D5033" stroke-width="2.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-face-watch" viewBox="0 0 40 40">
+    <circle cx="20" cy="20" r="20" fill="#7CB583"/>
+    <circle cx="14" cy="16" r="2.4" fill="#2D5033"/>
+    <circle cx="26" cy="16" r="2.4" fill="#2D5033"/>
+    <line x1="13" y1="26" x2="27" y2="26" stroke="#2D5033" stroke-width="2.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="icon-face-locked" viewBox="0 0 40 40">
+    <circle cx="20" cy="20" r="20" fill="#7CB583"/>
+    <circle cx="14" cy="16" r="2.4" fill="#2D5033"/>
+    <circle cx="26" cy="16" r="2.4" fill="#2D5033"/>
+    <path d="M12 28 Q20 22 28 28" fill="none" stroke="#2D5033" stroke-width="2.8" stroke-linecap="round"/>
+  </symbol>
+</svg>
 
-  <div id="greeting">
-    <div class="greeting">Hi, I'm Ed.</div>
-    <div class="greeting-sub">Ask me about SEC filings — who raised money, what a public company disclosed, what's happening in a sector. I pull live data from EDGAR.</div>
-    <div class="chips" id="chips">
-      <button class="chip" data-ask="Show me AI companies that raised in 2026">AI raises in 2026</button>
-      <button class="chip" data-ask="Has Anthropic filed anything recently?">Anthropic filings</button>
-      <button class="chip" data-ask="Big fintech Form Ds this quarter">Big fintech raises</button>
-      <button class="chip" data-ask="What's a Form D?">What's a Form D?</button>
+<header class="mo-header">
+  <div class="mo-header-inner">
+    <div class="mo-header-spacer"></div>
+    <button class="mo-header-action" id="btn-reset" aria-label="New conversation" title="New conversation">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"/>
+        <polyline points="1 20 1 14 7 14"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg>
+    </button>
+    <button class="mo-header-action" id="btn-about" aria-label="About" title="About">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main id="mo-main">
+  <div class="mo-thread" id="mo-thread">
+    <!-- Greeting + content gets injected here -->
+  </div>
+</main>
+
+<!-- Sticky composer -->
+<form class="mo-composer" id="mo-composer">
+  <div class="mo-composer-inner">
+    <input
+      type="text"
+      class="mo-input"
+      id="mo-input"
+      placeholder="Ask Mo about the weather..."
+      autocomplete="off"
+      autocapitalize="off"
+      autocorrect="off"
+    />
+    <button type="submit" class="mo-send" id="mo-send" aria-label="Send">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="22" y1="2" x2="11" y2="13"/>
+        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg>
+    </button>
+  </div>
+</form>
+
+<!-- About modal -->
+<div class="mo-modal" id="mo-modal" hidden>
+  <div class="mo-modal-backdrop" id="mo-modal-backdrop"></div>
+  <div class="mo-modal-card" id="mo-modal-card">
+    <button class="mo-modal-close" id="mo-modal-close" aria-label="Close">×</button>
+    <div class="mo-modal-content" id="mo-modal-content">
+      <!-- Filled in from JS -->
     </div>
   </div>
-
-  <div class="thread" id="thread"></div>
 </div>
 
-<div class="askbar">
-  <div class="askbar-inner">
-    <input id="askInput" placeholder="Ask Ed anything about SEC filings…" autocomplete="off">
-    <button id="askBtn">Ask</button>
-  </div>
-</div>
-
+<!-- Config + scripts. Order matters. -->
 <script type="module">
-  // ═══════════════════════════════════════════════════════════════════
-  // Ed — browser-side orchestration
-  // ═══════════════════════════════════════════════════════════════════
-  //
-  // Same two-pass streaming pattern as Mo:
-  //   1. First-pass ed_stream: user question → Ed writes prose, optionally
-  //      emits a <data /> tag mid-stream. Browser detects the tag, aborts
-  //      the stream, fires edgar_proxy, renders a card.
-  //   2. Second-pass ed_stream: history + payload summary → Ed writes
-  //      grounded interpretation beneath the card.
-  //
-  // Streamlined from Mo: no smart pills, no subaward direction logic, no
-  // fabrication detection (Ed's data is all from EDGAR XML — not LLM-
-  // generated numbers). No territory pills, no card-action tray.
-
-  import { fetchEdgar, summarizePayloadForEd } from './fetcher.js';
-
-  const AI_ENDPOINT = 'https://4yjfpnei2qnulzfcyrunh564qy0mxptv.lambda-url.us-east-1.on.aws/';
-  const PROXY_ENDPOINT = AI_ENDPOINT;  // same Lambda, different request_type
-
-  const Utils = {
-    escapeHtml(s) {
-      return String(s ?? '').replace(/[&<>"']/g, c =>
-        ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])
-      );
-    },
-    fmtDollars(amount) {
-      if (amount == null || !Number.isFinite(amount)) return '—';
-      if (amount === 0) return '$0';
-      if (amount >= 1e9) return `$${(amount / 1e9).toFixed(1)}B`;
-      if (amount >= 1e6) return `$${(amount / 1e6).toFixed(1)}M`;
-      if (amount >= 1e3) return `$${(amount / 1e3).toFixed(0)}K`;
-      return `$${amount.toLocaleString()}`;
-    },
-    fmtDate(s) { return s || '—'; },
-    edgarLink(row) {
-      if (!row.cik || !row.accession) return null;
-      const cikNum = parseInt(row.cik, 10);
-      const accNoDash = row.accession.replace(/-/g, '');
-      return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cikNum}&type=&dateb=&owner=include&count=40`;
-    },
-    filingLink(row) {
-      if (!row.cik || !row.accession) return null;
-      const cikNum = parseInt(row.cik, 10);
-      const accNoDash = row.accession.replace(/-/g, '');
-      return `https://www.sec.gov/Archives/edgar/data/${cikNum}/${accNoDash}/`;
-    },
-  };
-
-  // ═══════════════════════════════════════════════════════════════════
-  // <data /> tag parsing (identical pattern to Mo's)
-  // ═══════════════════════════════════════════════════════════════════
-
-  const DATA_TAG_RE = /<data\s+([^>]+?)\/>|<data\s+([^>]*?)><\/data>/i;
-  const ATTR_RE = /(\w+)\s*=\s*"([^"]*)"/g;
-
-  function findDataTag(text) {
-    const m = DATA_TAG_RE.exec(text);
-    if (!m) {
-      const partialIdx = text.lastIndexOf('<data');
-      if (partialIdx >= 0) {
-        const tail = text.slice(partialIdx);
-        if (!/\/>/.test(tail) && !/<\/data>/i.test(tail)) {
-          return { pending: true, partialIndex: partialIdx };
-        }
-      }
-      return null;
-    }
-    const attrText = m[1] || m[2] || '';
-    const attrs = {};
-    for (const [, k, v] of attrText.matchAll(ATTR_RE)) attrs[k] = v;
-    return { match: m[0], attrs, index: m.index, length: m[0].length };
-  }
-
-  function stripDataTags(text) {
-    if (!text) return { cleaned: '', hasPartial: false };
-    const partialIdx = text.lastIndexOf('<data');
-    if (partialIdx >= 0) {
-      const tail = text.slice(partialIdx);
-      if (!/\/>/.test(tail) && !/<\/data>/i.test(tail)) {
-        const safe = text.slice(0, partialIdx);
-        return { cleaned: safe.replace(/<data\b[^>]*\/>/gi, '').trim(), hasPartial: true };
-      }
-    }
-    const partialPrefix = text.match(/<(?:d(?:a(?:t)?)?)?$/i);
-    if (partialPrefix) {
-      const safe = text.slice(0, partialPrefix.index);
-      return { cleaned: safe.replace(/<data\b[^>]*\/>/gi, '').trim(), hasPartial: true };
-    }
-    return {
-      cleaned: text.replace(/<data\b[^>]*\/>/gi, '').replace(/\n{3,}/g, '\n\n').trim(),
-      hasPartial: false,
-    };
-  }
-
-  // ═══════════════════════════════════════════════════════════════════
-  // Card renderers
-  // ═══════════════════════════════════════════════════════════════════
-
-  function renderFormDCard(slot, result, tagAttrs) {
-    const { rows, total, mode, resolvedCik, primaryEntityName, meta } = result;
-
-    if (!rows || rows.length === 0) {
-      slot.innerHTML = `<div class="ed-error">No filings matched. Try adjusting the date range, sector, or company name.</div>`;
-      return;
-    }
-
-    let html = '<div class="ed-card">';
-
-    // Company header for company-mode queries
-    if (mode === 'company' && primaryEntityName) {
-      html += `<div class="company-header">`;
-      html += `<div class="company-name">${Utils.escapeHtml(primaryEntityName)}</div>`;
-      html += `<div class="company-cik">CIK ${resolvedCik}</div>`;
-      if (meta?.fuzzyMatch) {
-        html += `<div class="fuzzy-warning">Couldn't find an exact match for "${Utils.escapeHtml(tagAttrs.company)}". Showing closest results.</div>`;
-      }
-      html += `</div>`;
-    }
-
-    // Header row
-    const showingCount = rows.length;
-    const formFilter = tagAttrs.form_type ? ` ${Utils.escapeHtml(tagAttrs.form_type)}` : '';
-    html += `<div class="formd-header">`;
-    html += `<div class="formd-count">Showing <strong>${showingCount}</strong> of <strong>${total.toLocaleString()}</strong>${formFilter} filings</div>`;
-    html += `<div class="formd-source">source: <a href="https://efts.sec.gov/LATEST/search-index" target="_blank" rel="noopener">SEC EDGAR</a></div>`;
-    html += `</div>`;
-
-    // Table
-    html += '<table class="formd-table">';
-    html += '<thead><tr>';
-    html += '<th>Entity</th>';
-    html += '<th>Form</th>';
-    html += '<th>Filed</th>';
-    html += '<th style="text-align:right">Offering</th>';
-    html += '<th></th>';
-    html += '</tr></thead><tbody>';
-
-    for (const r of rows) {
-      const amtClass = r.offeringAmount == null ? 'nil' : '';
-      const amtText = r.offeringAmount == null ? '—' : Utils.fmtDollars(r.offeringAmount);
-      const indLabel = r.investmentFundType || r.industryGroup || (r.sicDescription || '');
-      const stateLabel = (r.incStates && r.incStates[0]) || '';
-      const filingUrl = Utils.filingLink(r);
-
-      html += '<tr>';
-      html += `<td><div class="formd-entity">${Utils.escapeHtml(r.entityName)}</div>`;
-      if (indLabel || stateLabel) {
-        html += `<div class="formd-entity-meta">`;
-        if (indLabel) html += Utils.escapeHtml(indLabel);
-        if (indLabel && stateLabel) html += ' · ';
-        if (stateLabel) html += Utils.escapeHtml(stateLabel);
-        html += `</div>`;
-      }
-      html += `</td>`;
-      html += `<td class="formd-state">${Utils.escapeHtml(r.form || '')}</td>`;
-      html += `<td class="formd-date">${Utils.escapeHtml(r.fileDate || '')}</td>`;
-      html += `<td class="formd-amt ${amtClass}">${amtText}</td>`;
-      html += `<td>${filingUrl ? `<a class="formd-link" href="${filingUrl}" target="_blank" rel="noopener">view</a>` : ''}</td>`;
-      html += '</tr>';
-    }
-
-    html += '</tbody></table>';
-    html += '</div>';
-    slot.innerHTML = html;
-  }
-
-  // ═══════════════════════════════════════════════════════════════════
-  // Turn orchestration
-  // ═══════════════════════════════════════════════════════════════════
-
-  const App = {
-    state: {
-      turns: 0,
-      lastCardSummary: null,
-      debugVisible: false,
-    },
-    _history: [],
-
-    init() {
-      document.getElementById('askInput').addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); this.ask(); }
-      });
-      document.getElementById('askBtn').addEventListener('click', () => this.ask());
-      document.getElementById('chips').addEventListener('click', e => {
-        const btn = e.target.closest('.chip');
-        if (btn) {
-          const q = btn.getAttribute('data-ask');
-          document.getElementById('askInput').value = q;
-          this.ask();
-        }
-      });
-      document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
-          e.preventDefault();
-          this.state.debugVisible = !this.state.debugVisible;
-          console.log('[debug] visibility:', this.state.debugVisible ? 'ON' : 'OFF');
-          document.querySelectorAll('.ed-debug').forEach(el => {
-            el.style.display = this.state.debugVisible ? 'block' : 'none';
-          });
-        }
-      });
-
-      // Auto-fire ?q= if present
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const q = (params.get('q') || '').trim();
-        if (q) {
-          requestAnimationFrame(() => {
-            document.getElementById('askInput').value = q;
-            this.ask();
-          });
-        }
-      } catch {}
-    },
-
-    async ask(overrideQuestion) {
-      const input = document.getElementById('askInput');
-      const question = (overrideQuestion || input.value).trim();
-      if (!question) return;
-
-      input.value = '';
-      document.getElementById('askBtn').disabled = true;
-
-      // Hide greeting on first ask
-      if (this.state.turns === 0) {
-        document.getElementById('greeting').style.display = 'none';
-      }
-
-      this.state.turns++;
-
-      const thread = document.getElementById('thread');
-      const turn = document.createElement('div');
-      turn.className = 'turn';
-      turn.innerHTML = `
-        <div class="turn-user">${Utils.escapeHtml(question)}</div>
-        <div class="turn-ed">
-          <div class="prose streaming" data-role="prose"></div>
-          <div data-role="card-slot"></div>
-        </div>
-        <div class="ed-debug" style="display:${this.state.debugVisible ? 'block' : 'none'}"></div>
-      `;
-      thread.appendChild(turn);
-      turn.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-      const proseEl = turn.querySelector('[data-role="prose"]');
-      const cardSlot = turn.querySelector('[data-role="card-slot"]');
-      const debugEl = turn.querySelector('.ed-debug');
-
-      const debug = { question, firstPassRaw: '', tagAttrs: null, mode: null };
-
-      try {
-        await this._runTurn({
-          question,
-          proseEl,
-          cardSlot,
-          debug,
-        });
-      } catch (err) {
-        console.error('[ask] fatal', err);
-        proseEl.classList.remove('streaming');
-        cardSlot.innerHTML = `<div class="ed-error">Something went wrong: ${Utils.escapeHtml(err.message || String(err))}</div>`;
-        debug.fatal = err.message || String(err);
-      }
-
-      // Render debug
-      debugEl.textContent = JSON.stringify(debug, null, 2);
-
-      document.getElementById('askBtn').disabled = false;
-    },
-
-    async _runTurn({ question, proseEl, cardSlot, debug }) {
-      // Add user turn to history
-      this._history.push({ role: 'user', content: question });
-      // Cap at 20 messages
-      if (this._history.length > 20) this._history = this._history.slice(-20);
-
-      let dataTagSeen = false;
-      let preTagText = '';
-      let tagAttrs = null;
-      const abort = new AbortController();
-
-      // First pass
-      const firstPassFull = await this._stream({
-        history: this._history,
-        activeCardSummary: this.state.lastCardSummary,
-        payloadSummary: null,
-        abortController: abort,
-        onChunk: (accumulated) => {
-          debug.firstPassRaw = accumulated;
-          if (dataTagSeen) return;
-          const tagInfo = findDataTag(accumulated);
-          if (tagInfo && !tagInfo.pending) {
-            dataTagSeen = true;
-            preTagText = accumulated.slice(0, tagInfo.index).trim();
-            proseEl.textContent = preTagText;
-            proseEl.classList.remove('streaming');
-            tagAttrs = tagInfo.attrs;
-            debug.tagAttrs = { ...tagAttrs };
-            cardSlot.innerHTML = '<div class="ed-card"><div class="card-loading">Querying SEC EDGAR…</div></div>';
-            abort.abort();
-          } else if (tagInfo && tagInfo.pending) {
-            proseEl.textContent = accumulated.slice(0, tagInfo.partialIndex).trim();
-          } else {
-            proseEl.textContent = accumulated;
-          }
-        },
-      }).catch(err => {
-        if (dataTagSeen && err.name === 'AbortError') return null;
-        throw err;
-      });
-
-      if (!dataTagSeen) {
-        // Prose-only response — no data pull
-        proseEl.classList.remove('streaming');
-        const finalText = firstPassFull || preTagText || '';
-        proseEl.textContent = finalText;
-        this._history.push({ role: 'model', content: finalText });
-        debug.mode = 'prose';
-        return;
-      }
-
-      // Data pull
-      debug.mode = 'data';
-      let result;
-      try {
-        result = await fetchEdgar(tagAttrs, PROXY_ENDPOINT);
-      } catch (fetchErr) {
-        console.error('[fetchEdgar]', fetchErr);
-        cardSlot.innerHTML = `<div class="ed-error">Couldn't pull that data. ${Utils.escapeHtml(fetchErr.message || '')}</div>`;
-        debug.fetchError = fetchErr.message;
-        return;
-      }
-
-      debug.rowCount = result.rows.length;
-      debug.total = result.total;
-      debug.edgarMode = result.mode;
-
-      // Render card
-      cardSlot.innerHTML = '';
-      const cardWrapper = document.createElement('div');
-      cardSlot.appendChild(cardWrapper);
-      renderFormDCard(cardWrapper, result, tagAttrs);
-
-      // Build a compact card summary for the NEXT turn's context
-      this.state.lastCardSummary = this._buildCardSummary(result, tagAttrs);
-
-      // Second pass — grounded prose beneath the card
-      const summary = summarizePayloadForEd(result, tagAttrs);
-      const historyForSecond = [
-        ...this._history,
-        { role: 'model', content: preTagText + '\n\n[data pulled; see card]' },
-      ];
-
-      const postProse = document.createElement('div');
-      postProse.className = 'prose streaming';
-      postProse.style.marginTop = '14px';
-      cardSlot.parentElement.appendChild(postProse);
-
-      const secondAbort = new AbortController();
-      const secondFull = await this._stream({
-        history: historyForSecond,
-        activeCardSummary: this.state.lastCardSummary,
-        payloadSummary: summary,
-        abortController: secondAbort,
-        onChunk: (accumulated) => {
-          const { cleaned, hasPartial } = stripDataTags(accumulated);
-          if (hasPartial) return;
-          postProse.textContent = cleaned;
-        },
-      });
-      postProse.classList.remove('streaming');
-
-      // Save model turn to history (clean text only)
-      const modelTurn = preTagText + '\n\n' + (stripDataTags(secondFull || '').cleaned || '');
-      this._history.push({ role: 'model', content: modelTurn });
-
-      debug.secondPassRaw = secondFull;
-    },
-
-    _buildCardSummary(result, tagAttrs) {
-      const parts = [];
-      if (tagAttrs.company) parts.push(`Company: ${tagAttrs.company}`);
-      if (tagAttrs.sector) parts.push(`Sector: ${tagAttrs.sector}`);
-      if (tagAttrs.form_type) parts.push(`Form: ${tagAttrs.form_type}`);
-      if (tagAttrs.date_after) parts.push(`From: ${tagAttrs.date_after}`);
-      if (tagAttrs.date_before) parts.push(`To: ${tagAttrs.date_before}`);
-      if (tagAttrs.min_amount) parts.push(`Min: $${parseInt(tagAttrs.min_amount).toLocaleString()}`);
-      parts.push(`Showing ${result.rows.length} of ${result.total} filings`);
-      if (result.rows.length > 0) {
-        const top = [...result.rows]
-          .filter(r => r.offeringAmount)
-          .sort((a, b) => (b.offeringAmount || 0) - (a.offeringAmount || 0))
-          .slice(0, 3);
-        if (top.length > 0) {
-          parts.push(`Top by amount: ${top.map(r => `${r.entityName} ${Utils.fmtDollars(r.offeringAmount)}`).join(', ')}`);
-        }
-      }
-      return parts.join(' | ');
-    },
-
-    async _stream({ history, activeCardSummary, payloadSummary, abortController, onChunk }) {
-      const res = await fetch(AI_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          request_type: 'ed_stream',
-          history,
-          active_card_summary: activeCardSummary || null,
-          payload_summary: payloadSummary || null,
-        }),
-        signal: abortController?.signal,
-      });
-      if (!res.ok) throw new Error(`stream ${res.status}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '', accumulated = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          try {
-            const msg = JSON.parse(raw);
-            if (msg.t === 'chunk' && msg.text) {
-              accumulated += msg.text;
-              onChunk(accumulated);
-            } else if (msg.t === 'done') {
-              return accumulated;
-            } else if (msg.t === 'error') {
-              throw new Error(msg.msg || 'Ed encountered an error.');
-            }
-          } catch (e) {
-            if (e.message?.startsWith('Ed ')) throw e;
-          }
-        }
-      }
-      return accumulated;
-    },
-  };
-
-  // Expose for debugging + share-link auto-fire
-  window.App = App;
-  App.init();
+  import config from './config.js';
+  // Make config globally available to non-module scripts below.
+  window.MO_CONFIG = config;
 </script>
+<script src="card-renderer.js"></script>
+<script src="chips.js"></script>
+<script src="stream-client.js"></script>
+<script src="app.js"></script>
+
 </body>
 </html>
