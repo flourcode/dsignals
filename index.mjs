@@ -799,6 +799,96 @@ const handleDataProxy = async (responseStream, body) => {
 
 
 // ============================================================================
+// SECTION 10b: HANDLER — audit (diagnostic; hits EDGAR raw, reports filter impact)
+// ============================================================================
+//
+// Lets a frontend audit page hit EDGAR directly via the Lambda (bypassing
+// browser CORS) and see exactly what Mo's filter pipeline dropped vs kept.
+//
+// Body shape:
+//   { request_type: 'audit', edgar_params: {q, forms, startdt, enddt, ...},
+//     min_amount: 20000000, state: 'CA' }
+//
+// Response shape:
+//   {
+//     raw: { total: N, hits: [...rows] },
+//     filtered: {
+//       dropped_non_operating: [...rows],
+//       dropped_amount: [...rows],
+//       dropped_state: [...rows],
+//       survived: [...rows]
+//     }
+//   }
+// ============================================================================
+
+const handleAudit = async (responseStream, body) => {
+  try {
+    const { edgar_params, min_amount, state } = body || {};
+    if (!edgar_params) {
+      writeJsonResponse(responseStream, 400, { error: 'Missing edgar_params' });
+      return;
+    }
+
+    // Build the EDGAR full-text search URL from params
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(edgar_params)) {
+      if (v !== null && v !== undefined && v !== '') params.set(k, String(v));
+    }
+    if (!params.has('hits')) params.set('hits', '100');
+
+    const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}`;
+    console.log('[audit]', JSON.stringify({ url }));
+
+    const data = await fetchEdgar(url);
+    const hits = data?.hits?.hits || [];
+    const totalRaw = data?.hits?.total?.value || hits.length;
+
+    // Parse rows the same way Mo does
+    const rows = hits.map(h => parseFiling(h, null));
+
+    // Apply Mo's filter pipeline, capturing what each stage dropped
+    const droppedNonOperating = rows.filter(r => isNonOperatingFiler(r.filer_name));
+    let surviving = rows.filter(r => !isNonOperatingFiler(r.filer_name));
+
+    let droppedAmount = [];
+    if (min_amount) {
+      const minAmt = parseInt(min_amount, 10);
+      droppedAmount = surviving.filter(r => !r.amount || r.amount < minAmt);
+      surviving = surviving.filter(r => r.amount && r.amount >= minAmt);
+    }
+
+    let droppedState = [];
+    if (state) {
+      droppedState = surviving.filter(r => r.state_of_inc !== state);
+      surviving = surviving.filter(r => r.state_of_inc === state);
+    }
+
+    writeJsonResponse(responseStream, 200, {
+      raw: {
+        total: totalRaw,
+        returned: rows.length,
+        sample: rows.slice(0, 10),
+      },
+      filtered: {
+        dropped_non_operating_count: droppedNonOperating.length,
+        dropped_non_operating_sample: droppedNonOperating.slice(0, 5),
+        dropped_amount_count: droppedAmount.length,
+        dropped_amount_sample: droppedAmount.slice(0, 5),
+        dropped_state_count: droppedState.length,
+        dropped_state_sample: droppedState.slice(0, 5),
+        survived_count: surviving.length,
+        survived: surviving.slice(0, 30),
+      },
+      url,
+    });
+  } catch (err) {
+    console.error('[audit] error', err.message);
+    writeJsonResponse(responseStream, 502, { error: err.message });
+  }
+};
+
+
+// ============================================================================
 // SECTION 11: SKILL DATA FETCHER — SEC EDGAR
 // ============================================================================
 //
@@ -1710,6 +1800,11 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
 
       case 'data_proxy':
         await handleDataProxy(responseStream, body);
+        logReq('ok');
+        return;
+
+      case 'audit':
+        await handleAudit(responseStream, body);
         logReq('ok');
         return;
 
