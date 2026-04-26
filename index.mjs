@@ -159,6 +159,31 @@ If the user is excited ("perfect day for a hike?"), match their energy when warr
 Length: 2-4 short sentences after the card renders. Be the friend who tells you what matters and gets out of the way. Don't pad.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHEN THE CARD COMES BACK EMPTY (no_data)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sometimes the location lookup fails — the geocoder couldn't find the city, or NOAA doesn't have a forecast grid for those coordinates. The card will show a "no data" message. Your job in pass 2: acknowledge what happened and give one specific suggestion, in 2 sentences max.
+
+DO NOT repeat your pass-1 setup sentence. DO NOT say you'll "pull the forecast" again. The fetch already happened and failed. Move on.
+
+User asked: "What's the weather in Brambleton, VA?"
+Card returned: no_data
+Good pass 2: "Brambleton might be too small to register in NOAA's lookup. Try the ZIP 20148 or 'Ashburn, VA' — both should pull what you need."
+
+User asked: "weather in Floob, Idaho?"
+Card returned: no_data
+Good pass 2: "Floob doesn't ring a bell for NOAA. Double-check the spelling, or try the nearest larger town instead."
+
+User asked: "What's it like in Tokyo?"
+Card returned: no_data with NOAA-coverage message
+Good pass 2: "Tokyo's outside NOAA's coverage — they're US-only. Japan's weather agency is JMA if you want the official source."
+
+BAD pass 2 (NEVER DO THIS):
+"I'll pull the forecast for Brambleton..." [you ALREADY pulled it. The card shows it failed.]
+"Let me try again..." [you can't try again from prose. Suggest a fix the user can act on.]
+"That's frustrating, let me know if I can help..." [vague filler. Be specific.]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHEN NOT TO EMIT A TAG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -874,43 +899,179 @@ const COMMON_CITIES = {
   'gilbert': { lat: 33.3528, lon: -111.7890 },
   'boise': { lat: 43.6150, lon: -116.2023 },
   'bend': { lat: 44.0582, lon: -121.3153 },
+  // DMV (DC/Maryland/Virginia) — common queries
+  'ashburn': { lat: 39.0438, lon: -77.4875 },
+  'brambleton': { lat: 38.9988, lon: -77.5314 },
+  'leesburg': { lat: 39.1157, lon: -77.5636 },
+  'reston': { lat: 38.9586, lon: -77.3570 },
+  'herndon': { lat: 38.9696, lon: -77.3861 },
+  'sterling': { lat: 39.0062, lon: -77.4286 },
+  'fairfax': { lat: 38.8462, lon: -77.3064 },
+  'arlington va': { lat: 38.8816, lon: -77.0910 },
+  'alexandria': { lat: 38.8048, lon: -77.0469 },
+  'tysons': { lat: 38.9189, lon: -77.2299 },
+  'mclean': { lat: 38.9339, lon: -77.1773 },
+  'bethesda': { lat: 38.9847, lon: -77.0947 },
+  'rockville': { lat: 39.0840, lon: -77.1528 },
+  'silver spring': { lat: 38.9907, lon: -77.0261 },
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// GEOCODING — three paths in priority order:
+//   1. ZIP code → Zippopotam.us (free, no auth)
+//   2. Common city dictionary → instant, no API call
+//   3. City/place name → Open-Meteo geocoding API (free, no auth)
+//                        With smart state matching when user provides ", VA" etc.
+// ──────────────────────────────────────────────────────────────────────────
+
+// US state name → abbreviation (and abbreviation → name) for state matching
+const STATE_NORMALIZE = {
+  'al': 'alabama', 'alabama': 'alabama',
+  'ak': 'alaska', 'alaska': 'alaska',
+  'az': 'arizona', 'arizona': 'arizona',
+  'ar': 'arkansas', 'arkansas': 'arkansas',
+  'ca': 'california', 'california': 'california',
+  'co': 'colorado', 'colorado': 'colorado',
+  'ct': 'connecticut', 'connecticut': 'connecticut',
+  'de': 'delaware', 'delaware': 'delaware',
+  'fl': 'florida', 'florida': 'florida',
+  'ga': 'georgia', 'georgia': 'georgia',
+  'hi': 'hawaii', 'hawaii': 'hawaii',
+  'id': 'idaho', 'idaho': 'idaho',
+  'il': 'illinois', 'illinois': 'illinois',
+  'in': 'indiana', 'indiana': 'indiana',
+  'ia': 'iowa', 'iowa': 'iowa',
+  'ks': 'kansas', 'kansas': 'kansas',
+  'ky': 'kentucky', 'kentucky': 'kentucky',
+  'la': 'louisiana', 'louisiana': 'louisiana',
+  'me': 'maine', 'maine': 'maine',
+  'md': 'maryland', 'maryland': 'maryland',
+  'ma': 'massachusetts', 'massachusetts': 'massachusetts',
+  'mi': 'michigan', 'michigan': 'michigan',
+  'mn': 'minnesota', 'minnesota': 'minnesota',
+  'ms': 'mississippi', 'mississippi': 'mississippi',
+  'mo': 'missouri', 'missouri': 'missouri',
+  'mt': 'montana', 'montana': 'montana',
+  'ne': 'nebraska', 'nebraska': 'nebraska',
+  'nv': 'nevada', 'nevada': 'nevada',
+  'nh': 'new hampshire', 'new hampshire': 'new hampshire',
+  'nj': 'new jersey', 'new jersey': 'new jersey',
+  'nm': 'new mexico', 'new mexico': 'new mexico',
+  'ny': 'new york', 'new york': 'new york',
+  'nc': 'north carolina', 'north carolina': 'north carolina',
+  'nd': 'north dakota', 'north dakota': 'north dakota',
+  'oh': 'ohio', 'ohio': 'ohio',
+  'ok': 'oklahoma', 'oklahoma': 'oklahoma',
+  'or': 'oregon', 'oregon': 'oregon',
+  'pa': 'pennsylvania', 'pennsylvania': 'pennsylvania',
+  'ri': 'rhode island', 'rhode island': 'rhode island',
+  'sc': 'south carolina', 'south carolina': 'south carolina',
+  'sd': 'south dakota', 'south dakota': 'south dakota',
+  'tn': 'tennessee', 'tennessee': 'tennessee',
+  'tx': 'texas', 'texas': 'texas',
+  'ut': 'utah', 'utah': 'utah',
+  'vt': 'vermont', 'vermont': 'vermont',
+  'va': 'virginia', 'virginia': 'virginia',
+  'wa': 'washington', 'washington': 'washington',
+  'wv': 'west virginia', 'west virginia': 'west virginia',
+  'wi': 'wisconsin', 'wisconsin': 'wisconsin',
+  'wy': 'wyoming', 'wyoming': 'wyoming',
+  'dc': 'district of columbia', 'district of columbia': 'district of columbia',
 };
 
 async function geocodeLocation(input) {
-  const norm = String(input || '').trim().toLowerCase();
+  const raw = String(input || '').trim();
+  const norm = raw.toLowerCase();
 
+  // Path 1: ZIP code → Zippopotam.us
   if (/^\d{5}$/.test(norm)) {
-    return await geocodeZip(norm);
+    const result = await geocodeZip(norm);
+    console.log('[geocode]', JSON.stringify({ input: raw, path: 'zip', result }));
+    return result;
   }
 
-  const city = norm.replace(/,.*$/, '').trim();
-  if (COMMON_CITIES[city]) return COMMON_CITIES[city];
+  // Path 2: Common city dictionary (instant, no API call)
+  // Try state-qualified key first ("arlington va"), then plain city ("arlington")
+  // Most disambiguation is unnecessary; a few cities have name collisions
+  // (Arlington TX vs VA, Portland OR vs ME). For those, the state-qualified
+  // entry wins when user provides a state.
+  const cityOnly = norm.replace(/,.*$/, '').trim();
+  const stateSuffix = norm.match(/,\s*([a-z]{2})\s*$/);
+  if (stateSuffix) {
+    const stateKey = `${cityOnly} ${stateSuffix[1]}`;
+    if (COMMON_CITIES[stateKey]) {
+      console.log('[geocode]', JSON.stringify({ input: raw, path: 'common_cities', city: stateKey, result: COMMON_CITIES[stateKey] }));
+      return COMMON_CITIES[stateKey];
+    }
+  }
+  if (COMMON_CITIES[cityOnly]) {
+    console.log('[geocode]', JSON.stringify({ input: raw, path: 'common_cities', city: cityOnly, result: COMMON_CITIES[cityOnly] }));
+    return COMMON_CITIES[cityOnly];
+  }
 
-  return await geocodeCensus(input);
+  // Path 3: Open-Meteo geocoding with smart state matching
+  // Extract state hint from "City, ST" or "City, State" format
+  const stateMatch = raw.match(/,\s*([A-Za-z][A-Za-z\s]*?)\s*$/);
+  const stateHint = stateMatch ? STATE_NORMALIZE[stateMatch[1].toLowerCase().trim()] : null;
+  // Send just the city name to the API (no state — we filter results below)
+  const cityForApi = stateMatch ? raw.slice(0, stateMatch.index).trim() : raw;
+
+  const result = await geocodeOpenMeteo(cityForApi, stateHint);
+  console.log('[geocode]', JSON.stringify({ input: raw, path: 'open_meteo', city: cityForApi, stateHint, result }));
+  return result;
 }
 
 async function geocodeZip(zip) {
-  const url = `https://geocoding.geo.census.gov/geocoder/locations/address?zip=${zip}&benchmark=Public_AR_Current&format=json`;
-  return fetchWithTimeout(url)
-    .then(r => r.json())
-    .then(data => {
-      const match = data?.result?.addressMatches?.[0];
-      if (!match) return null;
-      return { lat: match.coordinates.y, lon: match.coordinates.x };
-    })
-    .catch(() => null);
+  // Zippopotam.us — free, no auth, takes just a 5-digit ZIP
+  const url = `https://api.zippopotam.us/us/${zip}`;
+  try {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const place = data?.places?.[0];
+    if (!place) return null;
+    return {
+      lat: parseFloat(place.latitude),
+      lon: parseFloat(place.longitude),
+    };
+  } catch (err) {
+    console.error('[geocodeZip]', err.message);
+    return null;
+  }
 }
 
-async function geocodeCensus(input) {
-  const url = `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encodeURIComponent(input)}&benchmark=Public_AR_Current&format=json`;
-  return fetchWithTimeout(url)
-    .then(r => r.json())
-    .then(data => {
-      const match = data?.result?.addressMatches?.[0];
-      if (!match) return null;
-      return { lat: match.coordinates.y, lon: match.coordinates.x };
-    })
-    .catch(() => null);
+async function geocodeOpenMeteo(cityName, stateHint) {
+  // Open-Meteo — free, no auth, designed for city/place-name lookup
+  // Returns up to 5 results so we can pick the best one
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=10&country_code=US&language=en&format=json`;
+  try {
+    const res = await fetchWithTimeout(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const results = data?.results || [];
+    if (results.length === 0) return null;
+
+    // If user gave us a state hint, prefer results in that state
+    if (stateHint) {
+      const stateMatched = results.find(r =>
+        r.admin1?.toLowerCase() === stateHint
+      );
+      if (stateMatched) {
+        return { lat: stateMatched.latitude, lon: stateMatched.longitude };
+      }
+    }
+
+    // No state hint or no state match — pick by highest population
+    // (catches the "Ashburn → which Ashburn?" case sensibly without a hint)
+    const sorted = [...results].sort((a, b) =>
+      (b.population || 0) - (a.population || 0)
+    );
+    const top = sorted[0];
+    return { lat: top.latitude, lon: top.longitude };
+  } catch (err) {
+    console.error('[geocodeOpenMeteo]', err.message);
+    return null;
+  }
 }
 
 async function getGridPoint(lat, lon) {
