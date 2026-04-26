@@ -63,29 +63,27 @@
 
     els.thread.appendChild(greetingDiv);
 
-    // Add example queries (skill-specific examples for the hello-world weather skill)
-    const examples = [
-      "What's the weather in Bend, Oregon?",
-      "Active alerts near Denver?",
-      "Forecast for 90210",
-      "Current conditions in Chicago",
-    ];
+    // Example queries from config — each becomes a tappable chip on the
+    // greeting screen. If config doesn't define them, no chips render.
+    const examples = Array.isArray(config.exampleQueries) ? config.exampleQueries : [];
 
-    const examplesEl = document.createElement('div');
-    examplesEl.className = 'greeting-examples';
-    examplesEl.style.marginTop = '12px';
-    examplesEl.style.marginLeft = '80px';
+    if (examples.length > 0) {
+      const examplesEl = document.createElement('div');
+      examplesEl.className = 'greeting-examples';
+      examplesEl.style.marginTop = '12px';
+      examplesEl.style.marginLeft = '80px';
 
-    for (const ex of examples) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'greeting-example';
-      btn.textContent = ex;
-      btn.addEventListener('click', () => submitMessage(ex));
-      examplesEl.appendChild(btn);
+      for (const ex of examples) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'greeting-example';
+        btn.textContent = ex;
+        btn.addEventListener('click', () => submitMessage(ex));
+        examplesEl.appendChild(btn);
+      }
+
+      els.thread.appendChild(examplesEl);
     }
-
-    els.thread.appendChild(examplesEl);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -220,6 +218,16 @@
 
   // Expose for stream-client to call back
   window.MoApp = { submitMessage, resetThread };
+
+  // Set browser tab title from config
+  if (config.pageTitle) {
+    document.title = config.pageTitle;
+  }
+
+  // Set input placeholder from config
+  if (config.inputPlaceholder && els.input) {
+    els.input.placeholder = config.inputPlaceholder;
+  }
 
   // Initial render
   renderGreeting();

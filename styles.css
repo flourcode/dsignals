@@ -691,288 +691,138 @@ button {
 }
 
 /* ============================================================================
-   SEC EDGAR card layouts
-   These classes live INSIDE .turn-mo-card (which already provides bg/border/
-   padding/radius). So .sec-card itself is layout-only — no border, no bg.
+   SEC EDGAR card layouts — ported from fedmo's visual language
+   No tinted backgrounds inside cards. No decorative left borders.
+   Hierarchy through type weight and white space, not ornament.
    ============================================================================ */
 
-.sec-card {
-  /* layout container — parent .turn-mo-card has the visual frame */
+/* .sec-card is layout-only — parent .turn-mo-card has the visual frame */
+.sec-card { /* no styles needed */ }
+
+/* Stat row — bordered top + bottom, no fill (fedmo pattern) */
+.mo-stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 16px 0;
+  margin: 16px 0 4px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.mo-stat-row:has(.mo-stat:nth-child(2):last-child) {
+  grid-template-columns: repeat(2, 1fr);
 }
 
-/* ── Card head: title + summary ───────────────────────────────────────── */
-
-.sec-card-head {
-  margin-bottom: var(--s-4);
-  padding-bottom: var(--s-4);
-  border-bottom: 1px solid var(--border-soft);
+.mo-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
-.sec-card-title {
+.mo-stat-value {
   font-size: 18px;
   font-weight: 600;
   color: var(--text-title);
-  margin: 0 0 var(--s-2);
   letter-spacing: var(--track-tight);
-  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
 }
 
-.sec-card-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s-2);
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.sec-pill-label {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--primary-100);
-  color: var(--white);
+.mo-stat-label {
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.sec-filter-chip {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-tint);
   color: var(--text-muted);
-  font-size: 12px;
   font-weight: 500;
-  border: 1px solid var(--border-soft);
 }
 
-/* ── SPV trail groups (the killer Anthropic demo) ─────────────────────── */
-
-.sec-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
-
-.sec-group {
-  background: var(--bg-tint);
-  border-radius: var(--radius-sm);
-  padding: var(--s-3) var(--s-4);
-  border-left: 3px solid var(--primary-60);
-}
-
-.sec-group-head {
+/* Group/section heading: title left, meta right — no fills */
+.mo-comp-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: var(--s-3);
-  margin-bottom: var(--s-1);
+  margin: 20px 0 8px;
+  gap: 12px;
 }
 
-.sec-group-name {
+.mo-comp-head:first-of-type {
+  margin-top: 16px;
+}
+
+.mo-comp-title {
+  font-size: 14px;
   font-weight: 600;
-  font-size: 15px;
   color: var(--text-title);
   letter-spacing: var(--track-tight);
   flex: 1;
   min-width: 0;
 }
 
-.sec-group-meta {
-  display: flex;
-  gap: var(--s-3);
-  align-items: baseline;
-  flex-shrink: 0;
-}
-
-.sec-group-count {
-  font-size: 13px;
+.mo-comp-meta {
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-}
-
-.sec-group-amount {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--primary-100);
-  font-variant-numeric: tabular-nums;
-}
-
-.sec-group-detail {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--s-3);
-  font-size: 12px;
-  color: var(--text-faint);
-}
-
-.sec-group-dates {
-  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
-/* ── Filing rows (flat list, also used inside groups) ─────────────────── */
-
-.sec-rows {
+/* List + row primitives — clean rows separated by hairlines */
+.mo-list {
   display: flex;
   flex-direction: column;
-  gap: var(--s-1);
 }
 
-.sec-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--s-3);
+.mo-row {
+  display: flex;
   align-items: center;
-  padding: var(--s-3);
-  border-radius: var(--radius-sm);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 14px;
+  gap: 12px;
+  min-height: 44px;
+}
+.mo-row:last-child { border-bottom: none; }
+
+.mo-row-name {
+  color: var(--text-title);
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.mo-row-amount {
+  color: var(--text-title);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  flex-shrink: 0;
+  min-width: 56px;
+  text-align: right;
+}
+
+/* Two-line row (filer name on top, meta line below) */
+.mo-row-2line {
+  display: block;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
   text-decoration: none;
   color: inherit;
-  transition: background 120ms ease;
-  border: 1px solid transparent;
+  transition: opacity 120ms ease;
+}
+.mo-row-2line:last-child { border-bottom: none; }
+.mo-row-2line:hover { opacity: 0.7; }
+
+.mo-row-2line-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
 }
 
-.sec-row:hover {
-  background: var(--bg-tint);
-  border-color: var(--border-soft);
-}
-
-.sec-row-form {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--primary-100);
-  background: var(--primary-20);
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 0.02em;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  min-width: 50px;
-  text-align: center;
-}
-
-.sec-row-main {
-  min-width: 0;
-}
-
-.sec-row-filer {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-title);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: var(--track-tight);
-}
-
-.sec-row-meta {
+.mo-row-2line-meta {
   font-size: 12px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
-  margin-top: 2px;
-}
-
-.sec-row-amount {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-title);
-  font-variant-numeric: tabular-nums;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sec-row-amount-empty {
-  color: var(--text-faint);
-  font-weight: 400;
-}
-
-/* ── Card foot ────────────────────────────────────────────────────────── */
-
-.sec-card-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: var(--s-4);
-  padding-top: var(--s-3);
-  border-top: 1px solid var(--border-soft);
-  font-size: 11px;
-  color: var(--text-faint);
-  letter-spacing: 0.01em;
-}
-
-.sec-card-foot-note {
-  font-style: italic;
-}
-
-/* ── Empty state (no_data card) ──────────────────────────────────────── */
-
-.sec-card-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: var(--s-4) var(--s-3);
-}
-
-.sec-empty-icon {
-  width: 40px;
-  height: 40px;
-  color: var(--primary-60);
-  margin-bottom: var(--s-3);
-  opacity: 0.7;
-}
-
-.sec-empty-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-title);
-  margin-bottom: var(--s-1);
-}
-
-.sec-empty-summary {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: var(--s-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.sec-empty-message {
-  font-size: 13px;
-  color: var(--text-muted);
-  line-height: 1.5;
-  max-width: 360px;
-}
-
-/* ── Mobile tightening ────────────────────────────────────────────────── */
-
-@media (max-width: 480px) {
-  .sec-card-title {
-    font-size: 16px;
-  }
-
-  .sec-row {
-    padding: var(--s-3) var(--s-2);
-    gap: var(--s-2);
-  }
-
-  .sec-row-filer {
-    font-size: 13px;
-  }
-
-  .sec-row-form {
-    font-size: 10px;
-    padding: 3px 7px;
-    min-width: 42px;
-  }
-
-  .sec-group {
-    padding: var(--s-3);
-  }
-
-  .sec-group-detail {
-    flex-direction: column;
-    gap: var(--s-1);
-  }
 }

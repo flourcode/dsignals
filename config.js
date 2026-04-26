@@ -28,6 +28,7 @@ window.MO_CONFIG = {
   pageTitle: 'Mo · SEC Filings',
   tagline: "She lives inside SEC EDGAR.",
   greeting: "What private company are you watching?",
+  inputPlaceholder: "Ask Mo about a company or sector...",
 
   // ---- Example queries shown as tappable chips on the greeting screen ----
   exampleQueries: [
