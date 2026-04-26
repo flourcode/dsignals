@@ -129,7 +129,16 @@ Tag attributes (use only what the user implied; don't invent constraints they di
   min_amount     : Minimum offering size as integer USD (e.g. "20000000" for $20M).
                    Use ONLY if user mentions a size threshold ("over $20M", "big raises").
 
-  state          : 2-letter state code for state of incorporation. "DE", "CA", etc.
+  state          : 2-letter state code for state of INCORPORATION (not HQ).
+                   Most US tech companies incorporate in Delaware regardless
+                   of where they operate. So "California Form Ds" via state="CA"
+                   will return very few results — most California cybersecurity
+                   companies are Delaware-incorporated. Use this filter ONLY
+                   when the user explicitly asks about state of incorporation,
+                   or when looking for traditional industries (banking, real
+                   estate, energy) where in-state incorporation is more common.
+                   Don't auto-emit state for queries like "California cyber
+                   companies" — clarify first that EDGAR doesn't index HQ.
 
   date_after     : ISO date (YYYY-MM-DD). Filings on or after this date.
                    Use the CURRENT DATE section to compute relative phrases.
@@ -846,9 +855,27 @@ const handleAudit = async (responseStream, body) => {
     // Parse rows the same way Mo does
     const rows = hits.map(h => parseFiling(h, null));
 
-    // Apply Mo's filter pipeline, capturing what each stage dropped
-    const droppedNonOperating = rows.filter(r => isNonOperatingFiler(r.filer_name));
-    let surviving = rows.filter(r => !isNonOperatingFiler(r.filer_name));
+    // Apply Mo's filter pipeline IN ORDER, mirroring fetchFilingsSearch:
+    //   1. date_after / date_before
+    //   2. non-operating filers
+    //   3. min_amount
+    //   4. state
+    let surviving = [...rows];
+    const dateAfter = edgar_params.startdt;
+    const dateBefore = edgar_params.enddt;
+
+    let droppedDate = [];
+    if (dateAfter) {
+      droppedDate = droppedDate.concat(surviving.filter(r => !r.filed_date || r.filed_date < dateAfter));
+      surviving = surviving.filter(r => r.filed_date && r.filed_date >= dateAfter);
+    }
+    if (dateBefore) {
+      droppedDate = droppedDate.concat(surviving.filter(r => !r.filed_date || r.filed_date > dateBefore));
+      surviving = surviving.filter(r => r.filed_date && r.filed_date <= dateBefore);
+    }
+
+    const droppedNonOperating = surviving.filter(r => isNonOperatingFiler(r.filer_name));
+    surviving = surviving.filter(r => !isNonOperatingFiler(r.filer_name));
 
     let droppedAmount = [];
     if (min_amount) {
@@ -870,6 +897,8 @@ const handleAudit = async (responseStream, body) => {
         sample: rows.slice(0, 10),
       },
       filtered: {
+        dropped_date_count: droppedDate.length,
+        dropped_date_sample: droppedDate.slice(0, 5),
         dropped_non_operating_count: droppedNonOperating.length,
         dropped_non_operating_sample: droppedNonOperating.slice(0, 5),
         dropped_amount_count: droppedAmount.length,
@@ -1586,9 +1615,21 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
   // Drop fund/trust/mortgage noise — these are NOT operating-company raises
   rows = rows.filter(r => !isNonOperatingFiler(r.filer_name));
 
-  // Apply min_amount filter (post-fetch since EDGAR doesn't support it directly)
+  // Smart min_amount filter: many Form Ds don't fill in offering_amount (it's
+  // optional). Treating "unknown amount" as "below threshold" silently hides
+  // real raises. Better behavior: KEEP unknowns separately and surface them
+  // with a clear "amount not disclosed" indicator. Show known-amount matches
+  // first (largest first), then unknowns.
+  let unknownAmountCount = 0;
   if (minAmount) {
-    rows = rows.filter(r => r.amount && r.amount >= minAmount);
+    const known = rows.filter(r => r.amount && r.amount >= minAmount);
+    const unknown = rows.filter(r => !r.amount);
+    unknownAmountCount = unknown.length;
+    // Sort known largest-first so the headline number is highest
+    known.sort((a, b) => (b.amount || 0) - (a.amount || 0));
+    // Sort unknowns newest-first
+    unknown.sort((a, b) => (b.filed_date || '').localeCompare(a.filed_date || ''));
+    rows = [...known, ...unknown];
   }
 
   // Apply state filter
@@ -1606,8 +1647,10 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
     };
   }
 
-  // Sort newest first
-  rows.sort((a, b) => (b.filed_date || '').localeCompare(a.filed_date || ''));
+  // Sort newest first ONLY if we didn't already sort by amount
+  if (!minAmount) {
+    rows.sort((a, b) => (b.filed_date || '').localeCompare(a.filed_date || ''));
+  }
 
   // Honest total: if EDGAR capped at 10000, show the post-filter count, not the cap
   const totalCapped = totalRaw >= 10000;
@@ -1620,6 +1663,7 @@ async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfte
       total: total,
       shown: rows.length,
       total_capped: totalCapped,
+      unknown_amount_count: unknownAmountCount,
       filters: {
         sector: sector ? { key: sector, display: SECTORS[sector]?.display } : null,
         form_type: formType || null,

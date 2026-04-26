@@ -819,6 +819,13 @@ button {
   margin-left: auto;
 }
 
+.sec-row-amount-undisclosed {
+  color: var(--text-faint);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 11px;
+}
+
 .sec-row-arrow {
   color: var(--text-faint);
   font-size: 14px;

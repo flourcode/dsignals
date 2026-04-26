@@ -303,11 +303,21 @@
     const summary = card.query_summary || 'Filings';
     const total = card.total || card.shown || 0;
     const rows = card.rows || [];
+    const unknownCount = card.unknown_amount_count || 0;
 
     const totalDisplay = card.total_capped ? `${total}+` : `${total}`;
 
+    // Build subtitle — call out unknown-amount situation honestly
+    let subtitle = `${totalDisplay} filing${total === 1 ? '' : 's'}`;
+    if (card.total_capped) subtitle += ' (search capped)';
+    if (unknownCount > 0 && card.filters?.min_amount) {
+      subtitle += ` · ${unknownCount} with undisclosed amount`;
+    }
+
     const rowsHtml = rows.slice(0, 12).map(r => {
-      const amtText = r.amount ? fmtMoney(r.amount) : '';
+      const amtHtml = r.amount
+        ? `<span class="sec-row-amount">${escapeHtml(fmtMoney(r.amount))}</span>`
+        : `<span class="sec-row-amount sec-row-amount-undisclosed">undisclosed</span>`;
       return html`
         <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row sec-row-tall">
           <div class="sec-row-main">
@@ -316,7 +326,7 @@
               ${fmtDate(r.filed_date)} · ${escapeHtml(r.form_type || '?')}${r.state_of_inc ? ' · ' + escapeHtml(r.state_of_inc) : ''}
             </div>
           </div>
-          ${amtText ? `<span class="sec-row-amount">${escapeHtml(amtText)}</span>` : ''}
+          ${safe(amtHtml)}
           <span class="sec-row-arrow">→</span>
         </a>
       `;
@@ -325,7 +335,7 @@
     return fromHtml(html`
       <div class="sec-card">
         <h3 class="sec-headline">${summary}</h3>
-        <div class="sec-subhead">${totalDisplay} filing${total === 1 ? '' : 's'}${card.total_capped ? ' (search capped)' : ''}</div>
+        <div class="sec-subhead">${subtitle}</div>
 
         <div class="sec-rows">${safe(rowsHtml)}</div>
 
