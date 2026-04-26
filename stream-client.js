@@ -109,6 +109,7 @@
           const secondPass = await streamPass(apiEndpoint, {
             request_type: 'stream',
             history,
+            first_pass_text: firstPass.text,
             active_card_summary: cardSummary,
             payload_summary: JSON.stringify(dataResult.card).slice(0, 6000),
           }, afterEl);

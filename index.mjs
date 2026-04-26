@@ -599,38 +599,68 @@ const streamGemini = async (responseStream, geminiBody, label = 'stream') => {
 // ============================================================================
 
 const handleStream = async (responseStream, body) => {
-  const { history, active_card_summary, payload_summary } = body || {};
+  const { history, first_pass_text, active_card_summary, payload_summary } = body || {};
 
   if (!Array.isArray(history) || history.length === 0) {
     writeJsonResponse(responseStream, 400, { error: 'Missing history (must be non-empty array)' });
     return;
   }
 
-  // Variable per-turn context goes in the FIRST user message, NOT in
-  // systemInstruction. Keeps the system prompt byte-identical for caching.
-  const variableContextParts = [];
-  if (active_card_summary) {
-    variableContextParts.push(`ACTIVE CARD CONTEXT:\n${String(active_card_summary).slice(0, 2000)}`);
-  }
-  if (payload_summary) {
-    variableContextParts.push(`DATA RETURNED:\n${String(payload_summary).slice(0, 6000)}`);
-  }
+  const isPassTwo = !!(active_card_summary || payload_summary);
 
+  // Map history to Gemini contents format
   const historyContents = history.map(h => ({
     role: h.role === 'model' ? 'model' : 'user',
     parts: [{ text: String(h.content || '').slice(0, 8000) }],
   }));
 
-  // Synthetic model ack between variable context and history.
-  // CRITICAL: Two consecutive `user` messages cause 400 INVALID_ARGUMENT from
-  // Gemini. The model ack maintains alternating user→model→user roles.
-  const contents = variableContextParts.length > 0
-    ? [
-        { role: 'user', parts: [{ text: variableContextParts.join('\n\n') }] },
-        { role: 'model', parts: [{ text: 'Understood. Ready for the next turn.' }] },
-        ...historyContents,
-      ]
-    : historyContents;
+  let contents;
+
+  if (isPassTwo) {
+    // PASS 2: Mo just emitted a setup sentence + <data /> tag, the tool
+    // fetched the data, and now we need Mo to interpret what came back.
+    //
+    // Critical message order — the card data MUST be the freshest thing in
+    // context. If we put it before history, Gemini sees N messages of
+    // conversation between the data and the current task and loses focus,
+    // especially in multi-turn conversations. The result is Mo regressing
+    // to repeating her pass-1 setup line instead of interpreting.
+    //
+    //   [user]  past turn 1 question
+    //   [model] past turn 1 answer
+    //   ...
+    //   [user]  current question (already in history)
+    //   [model] Mo's pass-1 setup (just streamed, NOT yet in history)
+    //   [user]  CARD DATA — interpret this now
+    //
+    // The final user message contains the card payload. Gemini's next
+    // generation IS pass 2's interpretation prose.
+    const passOneAck = first_pass_text
+      ? { role: 'model', parts: [{ text: String(first_pass_text).slice(0, 4000) }] }
+      : { role: 'model', parts: [{ text: 'Pulling that data now.' }] };
+
+    const cardContextParts = [];
+    if (active_card_summary) {
+      cardContextParts.push(`CARD JUST RENDERED:\n${String(active_card_summary).slice(0, 2000)}`);
+    }
+    if (payload_summary) {
+      cardContextParts.push(`FULL DATA PAYLOAD:\n${String(payload_summary).slice(0, 6000)}`);
+    }
+    cardContextParts.push(
+      'Now write your pass-2 interpretation. The user can already see the card. ' +
+      'Add what the card cannot say: read the unusual, the timing, the alert level, the energy. ' +
+      '2-4 short sentences. Do NOT repeat your setup sentence. Do NOT emit another <data /> tag.'
+    );
+
+    contents = [
+      ...historyContents,
+      passOneAck,
+      { role: 'user', parts: [{ text: cardContextParts.join('\n\n') }] },
+    ];
+  } else {
+    // PASS 1 (or pure prose mode): just send the history as-is.
+    contents = historyContents;
+  }
 
   const geminiBody = {
     systemInstruction: { role: 'system', parts: [{ text: buildSystemPromptWithDate(SYSTEM_PROMPT) }] },
@@ -645,7 +675,7 @@ const handleStream = async (responseStream, body) => {
     statusCode: 200,
     headers: streamHeaders(),
   });
-  await streamGemini(stream, geminiBody, 'stream');
+  await streamGemini(stream, geminiBody, isPassTwo ? 'pass2' : 'pass1');
   stream.end();
 };
 
