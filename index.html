@@ -93,12 +93,8 @@
   </div>
 </div>
 
-<!-- Config + scripts. Order matters. -->
-<script type="module">
-  import config from './config.js';
-  // Make config globally available to non-module scripts below.
-  window.MO_CONFIG = config;
-</script>
+<!-- Config + scripts. Order matters — config.js must load first. -->
+<script src="config.js"></script>
 <script src="card-renderer.js"></script>
 <script src="chips.js"></script>
 <script src="stream-client.js"></script>

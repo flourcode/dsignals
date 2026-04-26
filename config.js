@@ -16,10 +16,11 @@
 // update both files. Most changes only need one or the other.
 //
 // This file is loaded by index.html via:
-//   <script type="module">import config from './config.js'; window.MO_CONFIG = config;</script>
+//   <script src="config.js"></script>
+// (Plain script, not type=module, so it runs synchronously before app.js.)
 // ============================================================================
 
-export default {
+window.MO_CONFIG = {
 
   // ---- Identity ----
   productName: 'mo-signals',
@@ -47,7 +48,7 @@ export default {
   },
 
   // ---- Data Source attribution ----
-  // Shown in card footers. Should match lambda/config.js.dataSource.
+  // Shown in card footers. Should match the lambda's DATA_SOURCE_NAME.
   dataSource: {
     name: 'NOAA Weather',
     url: 'https://api.weather.gov',
