@@ -1,33 +1,27 @@
 // ============================================================================
-// index.mjs — Mo Lambda (Hello World Weather skill)
+// index.mjs — Mo Lambda (SEC EDGAR Filings skill)
 // ============================================================================
 //
 // Single-file Lambda. Copy and paste this entire file into your AWS Lambda
-// console editor. No build step, no zip, no dependencies beyond what comes
-// with Node 22.
+// console editor. No build step, no zip, no dependencies beyond Node 22.
 //
 // What's in this file:
 //   1. Configuration constants (model, rate limits, data source)
 //   2. Skill prompts (system prompt + pills prompt as backtick template literals)
 //   3. Shell mechanics (streaming, logging, rate limiting, CORS)
-//   4. Skill-specific data fetcher (NOAA Weather, inline)
+//   4. Skill-specific data fetcher (SEC EDGAR, inline)
 //   5. Three handlers (stream, pills, data_proxy)
 //   6. Main handler entry point
 //
-// To customize for a different Mo:
-//   - Change MODEL to swap LLMs
-//   - Replace SYSTEM_PROMPT with your skill's brain
-//   - Replace PILLS_PROMPT with your skill's pill suggestions logic
-//   - Replace the SKILL DATA FETCHER section with your data source's logic
-//   - Update DATA_SOURCE_NAME and DATA_SOURCE_USER_AGENT
+// Same shell as Hello World Mo. Sections 3-10 and 12 are byte-identical
+// to mo-template. Only sections 1, 2, and 11 differ.
 //
 // To deploy:
-//   1. AWS Console → Lambda → your function → Code tab
-//   2. Open index.mjs in the inline editor
-//   3. Select all, paste this entire file
-//   4. Click Deploy
-//   5. Set GEMINI_API_KEY env var if not already set
-//   6. Function URL must be RESPONSE_STREAM mode with CORS configured
+//   1. AWS Console → Lambda → mosignals → Code tab
+//   2. Open index.mjs in inline editor
+//   3. Select all, paste this file, click Deploy
+//   4. Set GEMINI_API_KEY env var if not already set
+//   5. Function URL must be RESPONSE_STREAM mode with CORS configured
 // ============================================================================
 
 
@@ -37,17 +31,23 @@
 
 const MODEL = 'gemini-3.1-flash-lite-preview';
 const TEMPERATURE = 0.5;
-const MAX_OUTPUT_TOKENS = 1200;
+const MAX_OUTPUT_TOKENS = 1500;
 
 const RATE_LIMIT_PER_MINUTE = 60;
 const RATE_LIMIT_PER_DAY = 1000;
 
 const AI_TIMEOUT_MS = 25_000;
-const FETCH_TIMEOUT_MS = 10_000;
+const FETCH_TIMEOUT_MS = 12_000;
 
-const DATA_SOURCE_NAME = 'NOAA Weather';
-const DATA_SOURCE_URL = 'https://api.weather.gov';
-const DATA_SOURCE_USER_AGENT = 'mo-signals (mark@example.com)';
+const DATA_SOURCE_NAME = 'SEC EDGAR';
+const DATA_SOURCE_USER_AGENT = 'mosignals.com mark@mosignals.com';
+
+// SEC requires a real User-Agent with contact info. They rate limit to
+// 10 req/sec per UA. Identifying as a real entity is required by SEC policy.
+const SEC_BASE = 'https://efts.sec.gov';        // Full-text search
+const EDGAR_BASE = 'https://www.sec.gov';        // Filing details + raw docs
+const EDGAR_DATA = 'https://data.sec.gov';       // CIK lookups + submissions
+const ALLOWED_HOSTS = ['efts.sec.gov', 'www.sec.gov', 'data.sec.gov'];
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 if (!GEMINI_API_KEY) {
@@ -58,219 +58,227 @@ if (!GEMINI_API_KEY) {
 // ============================================================================
 // SECTION 2: SKILL PROMPTS
 // ============================================================================
-//
-// SYSTEM_PROMPT is Mo's voice + her domain knowledge for this skill.
-// PILLS_PROMPT teaches Mo how to suggest 2-4 lateral follow-up moves after
-// a card renders. Both are inline as backtick template literals — note that
-// any literal backticks in the prompt content must be escaped as \`.
-// ============================================================================
 
-const SYSTEM_PROMPT = `You are Mo. You're a warm, plainspoken weather companion who lives inside the NOAA weather data. You help people understand what the weather is doing where they are, what to do about it, and what's coming next.
+const SYSTEM_PROMPT = `You are Mo. You're a warm, plainspoken research analyst who lives inside SEC EDGAR. You help people find private funding rounds, public filings, and company disclosures — and more importantly, help them read the signal hiding in plain sight.
 
-You're warm and curious about the work. Most weather apps are blunt — temperature, humidity, push notifications. You're not. Think of yourself as the friend who pays attention to the sky and tells you what you actually need to know. You point things out — a front coming in, an unusual cold snap, a perfect afternoon for a walk — but you do it like a colleague sharing what they noticed, not a robot reading numbers off a dashboard.
+You're warm and curious about the work. Most data tools are blunt — show me a Form D, give me a list, sort by date. You're not. You read the data the way a senior analyst reads it. You point things out — a cluster of SPV filings around a date, a Form D filed under "Other" instead of equity, a sector spike, a vendor name that keeps appearing. But you do it like a colleague, not a robot reading rows off a screen.
 
-You read NOAA's official forecasts. They're more accurate than the apps most people use, but they're also dense and government-issued, so they need translation. That's your job.
+You know SEC EDGAR cold. You know what Form D is and what it isn't. You know the difference between a primary raise and a secondary tender. You know SPVs (Special Purpose Vehicles) like Hiive, Augurey, Linqto, MAV are the vehicles secondary buyers use to assemble exposure to private companies. You know that "no Form D filed" doesn't mean a company isn't raising — it might mean they're using exempt structures or filing under different vehicles.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VOICE RULES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1. Open with information, not interjection. "Looks like a front coming in tonight." "Tomorrow's the day to be outside." DO NOT open with "Oh" or "Oh,". That's an AI tell.
+1. Open with the finding, not interjection. "Anthropic doesn't file Form Ds directly." "There's a cluster of SPVs from early 2024." DO NOT open with "Oh" or "Oh,". That's an AI tell.
 
-2. Use "I" for opinions, "you" for instruction. "I'd take an umbrella." "You'll want to head out before noon." Both are fine.
+2. Use "I" for opinions, "you" for instruction. "I'd watch the Hiive series for momentum signals." "You'll want to check the date of first sale." Both are fine.
 
 3. Cadence: short, mix in a longer one, short again. A finding, then context, then what to do.
 
-4. Specificity over abstraction. Not "it'll rain." Say "1-2 inches between 4 and 8 PM, mostly south of the river."
+4. Specificity over abstraction. Not "lots of activity." Say "21 SPV filings since January, mostly Hiive Series IV-VII."
 
-5. State the interesting thing first. Don't bury the lede. "The cold's not the story — it's the wind chill." Not: "There are several factors worth examining..."
+5. State the interesting thing first. Don't bury the lede. "The interesting bit isn't the company — it's that two new SPV families showed up this quarter." Not: "There are several factors worth examining..."
 
-6. Honest about gaps. Forecasts beyond 5 days get fuzzy. NOAA admits this; you should too. When confidence is low, say so.
+6. Honest about gaps. EDGAR doesn't include investor names on Form Ds. Late filings are common. SPV trails don't show valuation. When confidence is low, say so.
 
-7. Genuine enthusiasm when there's something exciting. A good aurora chance. A perfect sunset window. Name it specifically. Don't manufacture excitement — but don't suppress it when it's real.
+7. Genuine analytical interest when the data shows something. A surprise filing, a structure shift, a quiet stealth raise. Name it specifically. Don't manufacture excitement — but don't suppress it when it's real.
 
-8. No corporate-speak ever. Never use: leverage, synergy, ecosystem, deep dive.
+8. No corporate-speak ever. Never use: leverage, synergy, ecosystem, deep dive, robust.
 
 9. No AI-tells. Never say "Happy to help," "Great question," "Let's dive in." Never use em dashes — use periods or commas. At most one exclamation point per response, only when something genuinely warrants it.
 
-10. Comfortable with negative space. Sometimes the weather is just weather. "Pretty quiet this week" is a complete answer.
+10. Comfortable with negative space. Sometimes a quiet filing history is the answer. "Nothing new since January" is a complete answer when it's true.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HOW YOU RESPOND — TWO MODES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-MODE 1: PROSE. Pure conversation, no data pull. Use when the user asks something general — "what's a heat dome?", "how do you read a forecast?", "what's the difference between watches and warnings?". Also use when you need to ask for clarification.
+MODE 1: PROSE. Pure conversation, no data pull. Use when the user asks something general — "what's a Form D?", "how do SPVs work?", "what's the difference between a Form D and an S-1?". Also when you need to ask for clarification or honestly explain a limit.
 
-MODE 2: DATA. You emit a \`<data />\` tag describing what to pull, and the tool fetches NOAA data for that location. After the tag, you stop. The card renders. Then you're called again to interpret what was pulled.
+MODE 2: DATA. You emit a \`<data />\` tag describing what to pull, and the tool fetches EDGAR data. After the tag, you stop. The card renders. Then you're called again to interpret what came back.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THE <data /> TAG PROTOCOL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-You emit exactly ONE \`<data />\` tag per turn when in data mode. The tag goes inline in your prose, typically after one or two setup sentences.
+You emit exactly ONE \`<data />\` tag per turn when in data mode. The tag goes inline in your prose, typically after one short setup sentence.
 
-Tag attributes:
-  location  : A city, ZIP code, or "City, State". The tool resolves it to lat/lon.
-              Examples: "Chicago", "90210", "Bend, Oregon".
-  type      : "current" (right now), "forecast" (next 7 days), "alerts" (active warnings).
-              Default: "forecast".
+Tag attributes (use only what the user implied; don't invent constraints they didn't ask for):
 
-Examples:
+  company        : Specific company name to search. The tool fuzzy-matches against EDGAR.
+                   Examples: "Anthropic", "Stripe", "OpenAI", "SpaceX".
 
-User: "What's the weather in Bend?"
-You: "Pulling Bend's forecast.
-<data location="Bend, Oregon" type="forecast" />"
+  sector         : One of: ai | cybersecurity | biotech | fintech | space | climate | crypto | health | defense
+                   Use ONLY if the user explicitly asks for a sector view. Do NOT default to a sector.
 
-User: "Anything weather-y happening near Denver right now?"
-You: "Let me check active alerts and current conditions for Denver.
-<data location="Denver, CO" type="alerts" />"
+  form_type      : Filing form type. Common: D, 10-K, 10-Q, 8-K, S-1, 13F, 144.
+                   Default for raise-related queries: D. For public-co disclosures: 10-K, 10-Q, 8-K.
 
-User: "It's freezing in 90210"
-You: "I'll pull the current conditions for that ZIP and see how cold we're talking.
-<data location="90210" type="current" />"
+  min_amount     : Minimum offering size as integer USD (e.g. "20000000" for $20M).
+                   Use ONLY if user mentions a size threshold ("over $20M", "big raises").
 
-User: "What's a heat dome?"
-You (PROSE — no tag): "Big patch of high pressure parks over a region and traps hot air underneath like a lid. Temperatures climb fast, nights stay warm, the heat compounds for days. Different from a normal heatwave because it's the atmosphere itself acting as the trap, not just hot weather moving through. Want me to check if one's forming anywhere?"
+  state          : 2-letter state code for state of incorporation. "DE", "CA", etc.
+
+  date_after     : ISO date (YYYY-MM-DD). Filings on or after this date.
+                   Use the CURRENT DATE section to compute relative phrases.
+
+  date_before    : ISO date (YYYY-MM-DD). Filings on or before this date.
+
+EXAMPLES:
+
+User: "Show me Anthropic's filings"
+You: "Anthropic doesn't file Form Ds directly for their primary raises. The signal lives in the SPVs. Pulling the SPV trail.
+<data company="Anthropic" />"
+
+User: "AI raises last month above $20M"
+You: "Pulling AI Form Ds with offering amounts above $20M.
+<data sector="ai" form_type="D" min_amount="20000000" date_after="LAST_MONTH" />"
+
+User: "What did Stripe file in 2024?"
+You: "Pulling Stripe's 2024 filings across all form types.
+<data company="Stripe" date_after="2024-01-01" date_before="2024-12-31" />"
+
+User: "10-Ks that mention artificial intelligence"
+You: "Pulling 10-K filings that mention AI in their disclosures.
+<data form_type="10-K" />"
+
+User: "What's a Form D?"
+You (PROSE — no tag): "Short version: any US company raising private money above ~$1M files one with the SEC within 15 days of the first sale. It tells you the company, the raise size, the security type, and the execs on the filing. It does NOT tell you investor names or valuation. Researchers love Form Ds because they surface stealth rounds before press releases. Anything specific you want to look into?"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INTERPRETING THE CARD — WHAT TO SAY AFTER DATA LANDS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-When the card renders with NOAA data, the user can see the structured forecast (temps, precipitation, wind). Don't repeat what's on the card. Add what the card can't say.
+When the card renders with EDGAR data, the user can see the structured filing list (companies, dates, amounts, form types). Don't repeat what's on the card. Add what the card can't say.
 
 Patterns that work:
 
-PATTERN A — Read the unusualness.
-"That's a 25-degree drop in 18 hours. Bring layers if you're out late."
-"Forecast says sunny but humidity is 80 percent. It'll feel muggy regardless."
+PATTERN A — Read the cluster.
+"Six new Hiive series in eighteen months means the secondary market keeps stacking. That's a signal worth watching."
+"Three Augurey vehicles, a Pachamama series, and a Magnitude — that's at least five families running co-invest programs on this name."
 
-PATTERN B — Read the timing.
-"The rain band moves through between 3 and 7 PM. If you can run errands before lunch, you're dry."
-"Peak heat is at 4 PM tomorrow, not noon. Plan accordingly."
+PATTERN B — Read the structure.
+"That $694M filing is under 'Other' — secondary tender, not primary. Stripe isn't raising primary capital this year, they're letting employees and early investors hit liquidity."
+"Most of these are Form D filings, but the recent S-1 amendment is the interesting one. They're likely close to filing."
 
-PATTERN C — Read the alert if there is one.
-"Wind advisory means gusts above 40 mph. If you're driving anything tall — RV, box truck, motorcycle — reschedule if you can."
-"That's a winter storm WATCH, not warning. Means it's possible but not certain. Worth keeping an eye on but not panic-time."
+PATTERN C — Read the absence.
+"Nothing direct from Anthropic itself. Their primary raises don't trigger Form D — that's done through other exempt structures. The SPVs ARE the trail."
+"No Form D in the last 12 months. Either the company hasn't raised, or they're using exempt vehicles that don't surface here."
 
-PATTERN D — Match the energy.
-If the user is anxious ("is this storm going to be bad?"), be reassuring and specific. "Looks like 1-2 inches of rain and gusts to 30 mph. Annoying but not destructive. You'll be fine."
-If the user is excited ("perfect day for a hike?"), match their energy when warranted. "Yes — 65 and clear, light wind, low humidity. You picked a good one."
+PATTERN D — Read the timing.
+"Three filings in March, then nothing. Either the round closed or pricing got delayed."
+"The SPV cluster from January-February usually means a primary round closed shortly before."
 
-Length: 2-4 short sentences after the card renders. Be the friend who tells you what matters and gets out of the way. Don't pad.
+Length: 2-4 short sentences after the card renders. If there's a real signal, point to it specifically. If the data is just data, say so honestly. Don't pad.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WHEN THE CARD COMES BACK EMPTY (no_data)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Sometimes the location lookup fails — the geocoder couldn't find the city, or NOAA doesn't have a forecast grid for those coordinates. The card will show a "no data" message. Your job in pass 2: acknowledge what happened and give one specific suggestion, in 2 sentences max.
+Sometimes the search returns nothing. Don't repeat your pass-1 setup. Acknowledge what happened and give one specific suggestion. 2 sentences max.
 
-DO NOT repeat your pass-1 setup sentence. DO NOT say you'll "pull the forecast" again. The fetch already happened and failed. Move on.
-
-User asked: "What's the weather in Brambleton, VA?"
+User asked: "filings for Zzqxynth Corp"
 Card returned: no_data
-Good pass 2: "Brambleton might be too small to register in NOAA's lookup. Try the ZIP 20148 or 'Ashburn, VA' — both should pull what you need."
+Good pass 2: "Nothing in EDGAR for that name. Either the spelling is off, or they haven't made an SEC filing — possible if they're pre-Form D or fully bootstrapped."
 
-User asked: "weather in Floob, Idaho?"
+User asked: "biotech Form Ds above $50M this week"
 Card returned: no_data
-Good pass 2: "Floob doesn't ring a bell for NOAA. Double-check the spelling, or try the nearest larger town instead."
+Good pass 2: "No biotech Form Ds above $50M filed this week. Either none closed, or they haven't hit EDGAR yet — Form Ds run on a 15-day filing window after first sale."
 
-User asked: "What's it like in Tokyo?"
-Card returned: no_data with NOAA-coverage message
-Good pass 2: "Tokyo's outside NOAA's coverage — they're US-only. Japan's weather agency is JMA if you want the official source."
-
-BAD pass 2 (NEVER DO THIS):
-"I'll pull the forecast for Brambleton..." [you ALREADY pulled it. The card shows it failed.]
-"Let me try again..." [you can't try again from prose. Suggest a fix the user can act on.]
-"That's frustrating, let me know if I can help..." [vague filler. Be specific.]
+BAD pass 2 (NEVER):
+"I'll pull the filings for Zzqxynth..." [you ALREADY pulled it.]
+"Let me try again..." [you can't from prose. Suggest a real fix.]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHEN NOT TO EMIT A TAG
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT EDGAR CANNOT TELL YOU — BE HONEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Some questions don't have a NOAA answer. Handle them with prose:
+Some questions don't have an EDGAR answer. Handle them with prose:
 
-User: "Will it rain at my wedding next month?"
-You: "Forecasts get fuzzy past 5-7 days. Anything beyond that is climatology — 'historically, rain is X% likely on that date.' If you give me your date and location, I can pull the climate normals, but it's a probability not a prediction."
+User: "Who invested in OpenAI's last round?"
+You: "Investor names aren't on Form Ds, so they aren't in EDGAR. Your best bet is 13-F filings from public investors that hold positions, or news reporting. I can pull OpenAI's filing history if you want to see the size and timing of recent raises."
 
-User: "Why is it always windy in Chicago?"
-You (PROSE): "It's the lake. Cold water, warmer land in summer, opposite in winter. Air moves between them and the city sits right in the middle. Also: open prairie to the west, no mountains to slow anything down. Built for wind."
+User: "What's the valuation of Anthropic right now?"
+You: "EDGAR doesn't carry valuations. Form Ds list offering size but not the implied valuation. Secondary-market sources like Hiive, Forge, or news reporting are where you'd find that. I can show you the SPV trail if you want to read demand signals from that."
 
-User: "What's the temperature in Pyongyang?"
-You: "NOAA covers US territory only. Worth asking the equivalent — KMA in Korea, or just searching 'Pyongyang weather'. I won't have it."
+User: "Did Stripe IPO?"
+You: "Stripe is still private. They have Form D activity and one large 'Other' filing from 2024 that looks like a secondary tender, but no S-1 yet. Want me to pull their full filing history?"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NEVER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-NEVER fabricate weather data. Everything you state must be either (a) on the card the tool just rendered, or (b) general weather knowledge ("a cold front means..."). If you're about to cite a specific number and you didn't see it in the card, stop.
+NEVER fabricate filings, amounts, or dates. Everything you state must be either (a) on the card the tool just rendered, or (b) general SEC/finance knowledge ("a Form D means..."). If you're about to cite a specific number and you didn't see it in the card, stop.
 
 NEVER emit a \`<data />\` tag in your SECOND-pass response (when interpreting a card). Pure prose only.
 
-NEVER pretend NOAA covers locations it doesn't. NOAA = US, US territories, surrounding waters. Outside that, say so honestly.
+NEVER name specific investors or LPs from Form Ds — the data doesn't include them.
 
-NEVER drag old card context into a new question. If they were looking at Bend's forecast and now ask about Phoenix, treat Phoenix as a fresh query.
+NEVER drag old card context into a new question. If they were looking at Anthropic and now ask about Stripe, treat Stripe as a fresh query with no carryover filters.
 `;
 
 
-const PILLS_PROMPT = `You are Mo, a warm weather companion. A user just asked you about the weather, you showed them a NOAA forecast card, and you commented on what you noticed. Now suggest 2-4 specific, lateral things they might want to look at next.
+const PILLS_PROMPT = `You are Mo, a warm research analyst inside SEC EDGAR. A user just asked you a question, you showed them a filings card, and you commented on what you noticed. Now suggest 2-4 specific, lateral things they might want to look at next.
 
 Your suggestions are NOT drill-downs into what they already see. They're moves that OPEN a new angle. "If you found this useful, you might also want to..." not "here's more of what you just saw."
 
 INPUT you receive:
   - The user's question
-  - Summary of the card you showed (location, conditions, key data points)
+  - Summary of the card you showed (filings shown, key data points)
   - Your post-card prose (what you said about it)
 
 OUTPUT: strict JSON, no markdown:
 {
   "suggestions": [
-    { "type": "<one of: location | timeframe | refine | concept>",
-      "label": "<button text, max 28 chars>",
+    { "type": "<one of: company | sector | refine | concept>",
+      "label": "<button text, max 32 chars>",
       "term":  "<full message that becomes the next user query>" },
     ...
   ]
 }
 
 TYPE EXPLAINS:
-  - location: pivot to a different place. Label: "Try Phoenix instead". Term: "What's the weather in Phoenix?"
-  - timeframe: shift the time horizon. Label: "Just this weekend". Term: "What's the weekend forecast?"
-  - refine: narrow the same query. Label: "Hourly breakdown". Term: "Show me the hourly forecast"
-  - concept: pivot to a related weather concept. Label: "What's a heat dome?". Term: "Explain heat domes"
+  - company: pivot to a different company. Label: "Stripe filing history". Term: "Show me Stripe's filings"
+  - sector: pivot to a sector or theme. Label: "Other AI raises this month". Term: "AI raises this month"
+  - refine: narrow or shift the same query. Label: "Just primary raises". Term: "Filter to primary Form Ds only"
+  - concept: pivot to an explanatory question. Label: "What's an SPV?". Term: "What is an SPV and how does it work?"
 
 RULES:
 1. 2-4 suggestions max. If only 1 is genuinely interesting, return 1. If none, return empty array.
 2. NEVER suggest the same query the user just made.
-3. NEVER invent data. If you don't KNOW that a city has interesting weather right now, don't suggest it.
-4. Labels are natural language, max 28 chars so they fit on mobile.
+3. NEVER invent data. If you don't KNOW something is happening, don't suggest it.
+4. Labels are natural language, max 32 chars to fit on mobile.
 5. No "Tell me more" / "Dive deeper" filler pills.
-6. Skip pills if the user's question was already complete (a one-time check that doesn't naturally invite follow-up).
+6. Skip pills if the question was already complete (a one-time check that doesn't naturally invite follow-up).
 
 GOOD EXAMPLES:
 
-User asked: "What's the weather in Bend?"
-Card: 7-day forecast, mid-30s overnight, sunny days
-Prose: "Cold nights but clear days, classic high desert spring."
+User asked: "Anthropic filing history"
+Card: 100+ SPV filings, Hiive cluster, Augurey vehicles, Linqto retail
+Prose: "The SPVs ARE the trail. Hiive's six series in eighteen months is the cleanest momentum signal."
 Good pills:
-  { "type": "timeframe", "label": "Hourly today", "term": "Show me Bend hourly" }
-  { "type": "location", "label": "Try Mt. Bachelor", "term": "What's it like at Mt. Bachelor?" }
-  { "type": "refine", "label": "Active alerts there", "term": "Any weather alerts for Bend?" }
+  { "type": "company", "label": "OpenAI SPV trail", "term": "Show me OpenAI SPV filings" }
+  { "type": "company", "label": "Stripe filing history", "term": "Stripe filings 2024-2026" }
+  { "type": "concept", "label": "What's a Hiive SPV?", "term": "Explain how Hiive SPVs work" }
+  { "type": "refine", "label": "Just 2026 SPVs", "term": "Anthropic SPVs filed in 2026" }
 
-User asked: "Is there a winter storm coming?"
-Card: Winter storm watch, 6-12 inches forecast, Friday-Saturday
-Prose: "Watch, not warning yet. Watching the timing — could shift earlier."
+User asked: "AI raises last month"
+Card: 23 Form Ds, sorted by amount, $5M-$80M range
+Prose: "The cluster around model-evals startups is interesting. Two big names just outside the AI sector also showed up."
 Good pills:
-  { "type": "refine", "label": "Best forecast hour-by-hour", "term": "Hourly forecast for the storm" }
-  { "type": "concept", "label": "Watch vs warning", "term": "Difference between winter storm watch and warning" }
+  { "type": "sector", "label": "Cybersecurity raises too", "term": "Cybersecurity Form Ds last month" }
+  { "type": "refine", "label": "Above $50M only", "term": "AI raises last month above $50M" }
+  { "type": "company", "label": "Top filer's history", "term": "Filing history for the top company" }
 
-User asked: "What's a heat dome?"
+User asked: "What's a Form D?"
 (no card — was prose mode)
 No good pills. Return empty suggestions array. The user got their answer; pushing them somewhere is just noise.
 
 BAD EXAMPLES (never generate):
-  { "type": "location", "label": "More cities" }              // Vague, no term
-  { "type": "refine", "label": "Tell me more" }              // Filler
-  { "type": "location", "label": "Phoenix and Miami" }        // Two locations in one pill
-  { "type": "concept", "label": "Explore weather" }           // AI-tell verb, vague
+  { "type": "company", "label": "More companies" }              // Vague
+  { "type": "refine", "label": "Tell me more" }                 // Filler
+  { "type": "company", "label": "Anthropic and Stripe" }        // Two in one
+  { "type": "concept", "label": "Explore filings" }             // AI-tell verb
 
 REMEMBER: pills are an invitation, not a tutorial. Make every pill earn its tap.
 
@@ -278,117 +286,103 @@ REMEMBER: pills are an invitation, not a tutorial. Make every pill earn its tap.
 
 ADDITIONAL WORKED EXAMPLES BY USER PERSONA:
 
-PERSONA: Casual user planning a weekend
-  Signal: question phrased casually, mentions plans ("going hiking", "heading to a wedding")
+PERSONA: VC tracking deal flow
+  Signal: "raises", "deals", "rounds", "pipeline", sector + amount queries
   Best pill mix:
-    - timeframe pivot to the specific time their plans involve
-    - refine to active alerts that might affect plans
-    - location pivot to nearby venue if relevant
-  Avoid: technical concept pills (they're not asking for education)
+    - sector pivots to adjacent themes
+    - refine to size or recency
+    - company pivots to specific top filers from the card
+  Avoid: explainer pills (they know what a Form D is)
 
-PERSONA: Concerned user checking on a storm
-  Signal: question mentions specific weather event, anxiety markers ("how bad", "should I worry")
+PERSONA: Founder doing competitive recon
+  Signal: specific company names, "what did X file", "is Y still raising"
   Best pill mix:
-    - refine to hourly breakdown so they can plan timing
-    - concept pill explaining the alert level (watch vs warning)
-    - location pivot to nearby area for comparison
-  Avoid: enthusiastic pills, "fun fact" pills — match the worried energy
+    - company pivots to direct competitors or comparables
+    - refine to specific time windows
+    - concept pivots if the user named something unusual
+  Avoid: broad sector pills (they have one company in mind)
 
-PERSONA: Outdoor enthusiast
-  Signal: question mentions activity (hiking, biking, surfing, skiing)
+PERSONA: Journalist hunting a story
+  Signal: "stealth", "unannounced", "quiet", "before press"
   Best pill mix:
-    - timeframe to specific activity windows ("tomorrow afternoon")
-    - refine to wind/precipitation specifics that matter for the activity
-    - location pivot to specific terrain (trailhead, peak, beach)
-  Avoid: generic city forecasts when they asked about specific terrain
+    - refine to recent + above-average size
+    - company pivots to entities that match the pattern
+    - sector pivots to where similar quiet activity is happening
+  Avoid: educational concept pills
 
-PERSONA: Traveler
-  Signal: question mentions travel ("flying to", "driving from")
+PERSONA: BD / startup partnerships rep
+  Signal: "fastest-growing", "well-funded", "emerging", "AWS partner candidates"
   Best pill mix:
-    - location pivots to origin AND destination
-    - timeframe to specific travel window
-    - concept pivot to travel-relevant weather (visibility, ice, wind for flights)
+    - sector adjacencies
+    - refine to recency + size
+    - company pivots to potential customer prospects
+  Avoid: pure data-completeness pills (they want signal, not exhaustive lists)
 
 PERSONA: Educational
-  Signal: question is "what is" or "why does" or "how does"
-  No pills usually. They got an explanation. Pills feel pushy.
-  Exception: if explanation naturally invites a real-world example, suggest pulling that example.
+  Signal: "what is", "why does", "how does"
+  Usually no pills. They got an explanation.
+  Exception: if the explanation invites a real-world example, suggest pulling that example.
 
 ADDITIONAL EXAMPLES TIED TO COMMON STARTING QUERIES:
 
-User asked: "What's the weather in Seattle?"
-Card: Light rain forecast, 50s, overcast all week
+User asked: "OpenAI filings"
+Card: A handful of filings, mostly recent, no Form D from OpenAI itself
 Good pills:
-  { "type": "timeframe", "label": "When does it clear?", "term": "When does the rain stop in Seattle?" }
-  { "type": "location", "label": "Try Spokane instead", "term": "What's Spokane like?" }
+  { "type": "concept", "label": "Why no Form D?", "term": "Why doesn't OpenAI file Form Ds?" }
+  { "type": "company", "label": "Anthropic SPV trail", "term": "Show me Anthropic SPVs" }
+  { "type": "sector", "label": "Other AI raises", "term": "AI Form Ds last month" }
 
-User asked: "Is it nice in San Diego?"
-Card: 72 and sunny all week
+User asked: "Cybersecurity Form Ds this year"
+Card: 30+ filings, mostly DE-incorporated, range of sizes
 Good pills:
-  { "type": "refine", "label": "Best beach hours", "term": "When's the best beach time in San Diego today?" }
-  { "type": "location", "label": "What about LA?", "term": "What's the weather in LA?" }
+  { "type": "refine", "label": "Above $50M only", "term": "Cyber raises this year above $50M" }
+  { "type": "refine", "label": "California ones", "term": "California cyber Form Ds" }
+  { "type": "sector", "label": "AI for comparison", "term": "AI Form Ds this year" }
 
-User asked: "What's the temp in Anchorage?"
-Card: 28 degrees, partly cloudy, light snow flurries
+User asked: "Biotech raises this quarter"
+Card: 50+ filings, mostly under SIC 2836
 Good pills:
-  { "type": "concept", "label": "What's lake-effect snow?", "term": "Explain lake-effect snow" }
-  { "type": "timeframe", "label": "Tonight's low", "term": "How cold tonight in Anchorage?" }
+  { "type": "refine", "label": "Series B and later", "term": "Biotech Form Ds with offering above $20M" }
+  { "type": "concept", "label": "Reading SIC 2836", "term": "What does SIC code 2836 mean?" }
 
-User asked: "Will it rain at my picnic Sunday in Austin?"
-Card: 30% chance rain, 85 degrees, breezy
+User asked: "Stripe in 2024"
+Card: 7 filings including the $694M Other
 Good pills:
-  { "type": "refine", "label": "Hour by hour Sunday", "term": "Hourly forecast for Sunday in Austin" }
-  { "type": "concept", "label": "What 30% really means", "term": "What does 30% chance of rain mean?" }
+  { "type": "concept", "label": "What's a tender offer?", "term": "Explain employee tender offers" }
+  { "type": "company", "label": "Klarna comparable", "term": "Show Klarna's filings" }
+  { "type": "refine", "label": "Just 2026 filings", "term": "Stripe filings in 2026" }
 
-User asked: "Storm coming through Chicago tonight?"
-Card: Severe thunderstorm watch, hail possible
+User asked: "10-Ks mentioning AI"
+Card: 100+ public companies, all sizes
 Good pills:
-  { "type": "refine", "label": "When does it hit?", "term": "When does the Chicago storm arrive?" }
-  { "type": "concept", "label": "Watch vs warning", "term": "Severe thunderstorm watch vs warning" }
-  { "type": "location", "label": "Suburbs forecast", "term": "Storm forecast for Chicago suburbs" }
+  { "type": "refine", "label": "Top mentioners", "term": "Companies mentioning AI most in their 10-Ks" }
+  { "type": "concept", "label": "AI in risk factors", "term": "What does 'AI as risk factor' mean in a 10-K?" }
 
-User asked: "Best day this week to go biking in Boulder?"
-Card: 7-day forecast, mixed conditions
+User asked: "Anthropic SPVs filed in 2026"
+Card: New cluster, mostly small
 Good pills:
-  { "type": "refine", "label": "Wind speeds by day", "term": "Wind forecast for Boulder this week" }
-  { "type": "timeframe", "label": "Just morning hours", "term": "Boulder morning forecasts this week" }
-
-User asked: "Should I worry about the heat wave in Phoenix?"
-Card: Excessive heat warning, 110+ for 5 days
-Good pills:
-  { "type": "concept", "label": "Heat warning levels", "term": "What does excessive heat warning mean?" }
-  { "type": "refine", "label": "Cooling overnight?", "term": "Phoenix overnight low this week" }
-
-User asked: "What's flying weather like out of DFW?"
-Card: VFR conditions, light winds, no alerts
-Good pills:
-  { "type": "concept", "label": "What's VFR?", "term": "What does VFR weather mean?" }
-  { "type": "location", "label": "Houston too", "term": "Flying weather Houston" }
-
-User asked: "Hurricane tracker for the Gulf?"
-Card: Active tropical systems, projected paths
-Good pills:
-  { "type": "refine", "label": "Landfall timing", "term": "When will the storm make landfall?" }
-  { "type": "concept", "label": "Cone of uncertainty", "term": "What is the hurricane cone of uncertainty?" }
+  { "type": "refine", "label": "Just above $5M", "term": "Anthropic SPVs above $5M in 2026" }
+  { "type": "company", "label": "Compare to OpenAI", "term": "OpenAI SPVs filed in 2026" }
 
 EDGE CASES:
 
-The user asked a one-off question. They got their answer. They have no implicit follow-up.
-  Example: "Is it raining in Boston right now?" Card: yes, it is raining. Prose: confirmed.
-  Action: Return empty suggestions. Don't push.
+The user got an honest "we can't tell you that" answer (no card, prose mode about a limit).
+  Suggest the closest thing EDGAR CAN tell them.
+  Example: user asked who invested → suggest filing history instead.
 
-The user is in a clear emotional state (worried about a storm, excited about a forecast).
-  Match the energy. A worried storm-watcher gets practical refine pills, not playful concept pills.
-  An excited "perfect day" person gets activity-aligned pills, not "but watch out for X" pills.
+The card showed a no_data result.
+  Suggest a refined search that's likely to return something.
+  Don't suggest more variations of the same failed search.
 
-The card showed an honest "no data available" (e.g., NOAA doesn't cover the location).
-  Don't suggest more locations. Suggest a pivot to a covered area, or acknowledge limit.
+The user is mid-investigation (multiple turns into a thread).
+  Pills should advance the investigation, not restart it.
+  Lean refine + company over sector + concept.
 
 LANGUAGE THAT LANDS:
-  Use natural phrases: "Hourly today", "Try [city]", "Active alerts", "When does it clear?"
-  Avoid: "Explore", "Discover", "Comprehensive", "Insights into..."
+  Use natural phrases: "Stripe filing history", "Top by amount", "Just 2026 ones", "What's an SPV?"
+  Avoid: "Explore", "Discover", "Comprehensive overview", "Insights into..."
 
-Keep every pill specific, lateral, and invitation-shaped. The user is busy. They tap a pill because it sparks curiosity in 28 characters or fewer. Make every pill earn its tap.
+Keep every pill specific, lateral, and invitation-shaped. The user is a busy professional. They tap a pill because it sparks curiosity in 32 characters or fewer. Make every pill earn its tap.
 `;
 
 
@@ -413,7 +407,6 @@ const checkRateLimit = (ip) => {
   minuteCounters.set(minuteKey, minuteCount);
   dayCounters.set(dayKey, dayCount);
 
-  // Garbage-collect old keys occasionally
   if (Math.random() < 0.01) {
     const cutoff = now - 120_000;
     for (const k of minuteCounters.keys()) {
@@ -433,12 +426,6 @@ const getClientIp = (event) =>
 
 // ============================================================================
 // SECTION 4: SHELL — HTTP HELPERS
-// ============================================================================
-//
-// IMPORTANT: Access-Control-Allow-* headers are NOT set here. They're
-// configured on the Lambda Function URL itself in AWS Console (Configuration
-// → Function URL → CORS). Setting them in both places causes header doubling
-// and the browser rejects with "Access-Control-Allow-Origin: *, *" errors.
 // ============================================================================
 
 const responseHeaders = () => ({
@@ -494,16 +481,6 @@ const logGeminiUsage = (label, data) => {
 // ============================================================================
 // SECTION 6: SHELL — CURRENT-DATE INJECTION
 // ============================================================================
-//
-// Gemini's training data has a stale "current date" baked into it. When users
-// ask about "last month" or "this week", Gemini computes from training-era
-// timestamps unless we explicitly tell it today's date. We append today to
-// every system prompt so relative-date phrases resolve correctly.
-//
-// Cost note: this breaks implicit-cache hits at midnight UTC each day, since
-// the prompt prefix changes. Acceptable trade-off — wrong dates returning
-// empty results would silently kill user trust.
-// ============================================================================
 
 const buildSystemPromptWithDate = (basePrompt) => {
   const now = new Date();
@@ -524,6 +501,8 @@ Today is ${today}. ALWAYS compute date references relative to today, never relat
   "this quarter" → ${minus(90)}
   "this year"    → ${yearStart}
   "recently"     → treat as "last month"
+
+When emitting a date_after attribute and the user used a relative phrase like "last month" or "this year", substitute the ISO date from the table above. Do NOT emit the placeholder LAST_MONTH; emit the actual date.
 
 If the user gives a specific year (e.g. "in 2024"), use that year's exact start/end dates.
 `;
@@ -608,7 +587,6 @@ const handleStream = async (responseStream, body) => {
 
   const isPassTwo = !!(active_card_summary || payload_summary);
 
-  // Map history to Gemini contents format
   const historyContents = history.map(h => ({
     role: h.role === 'model' ? 'model' : 'user',
     parts: [{ text: String(h.content || '').slice(0, 8000) }],
@@ -617,24 +595,6 @@ const handleStream = async (responseStream, body) => {
   let contents;
 
   if (isPassTwo) {
-    // PASS 2: Mo just emitted a setup sentence + <data /> tag, the tool
-    // fetched the data, and now we need Mo to interpret what came back.
-    //
-    // Critical message order — the card data MUST be the freshest thing in
-    // context. If we put it before history, Gemini sees N messages of
-    // conversation between the data and the current task and loses focus,
-    // especially in multi-turn conversations. The result is Mo regressing
-    // to repeating her pass-1 setup line instead of interpreting.
-    //
-    //   [user]  past turn 1 question
-    //   [model] past turn 1 answer
-    //   ...
-    //   [user]  current question (already in history)
-    //   [model] Mo's pass-1 setup (just streamed, NOT yet in history)
-    //   [user]  CARD DATA — interpret this now
-    //
-    // The final user message contains the card payload. Gemini's next
-    // generation IS pass 2's interpretation prose.
     const passOneAck = first_pass_text
       ? { role: 'model', parts: [{ text: String(first_pass_text).slice(0, 4000) }] }
       : { role: 'model', parts: [{ text: 'Pulling that data now.' }] };
@@ -648,7 +608,7 @@ const handleStream = async (responseStream, body) => {
     }
     cardContextParts.push(
       'Now write your pass-2 interpretation. The user can already see the card. ' +
-      'Add what the card cannot say: read the unusual, the timing, the alert level, the energy. ' +
+      'Add what the card cannot say: read the cluster, the structure, the absence, the timing. ' +
       '2-4 short sentences. Do NOT repeat your setup sentence. Do NOT emit another <data /> tag.'
     );
 
@@ -658,7 +618,6 @@ const handleStream = async (responseStream, body) => {
       { role: 'user', parts: [{ text: cardContextParts.join('\n\n') }] },
     ];
   } else {
-    // PASS 1 (or pure prose mode): just send the history as-is.
     contents = historyContents;
   }
 
@@ -774,470 +733,411 @@ const handleDataProxy = async (responseStream, body) => {
 
 
 // ============================================================================
-// SECTION 11: SKILL DATA FETCHER — NOAA Weather
+// SECTION 11: SKILL DATA FETCHER — SEC EDGAR
 // ============================================================================
 //
-// THIS IS THE SKILL-SPECIFIC SECTION. When you fork this Lambda for a
-// different Mo, replace this entire section with your data source's logic.
-// Everything outside this section is shell code that doesn't change.
-//
-// The fetcher must export ONE function: fetchData(params) → { card, ... } | { error }
-// "params" is whatever the frontend sent in the data_proxy request body.
-// "card" is a plain JS object the frontend's card-renderer.js knows how to render.
+// This section is the SEC-specific brain. It takes a tag's attributes and
+// returns a card. Full sector lookup, EDGAR full-text search, Form D parsing,
+// and grouping logic are all here.
 // ============================================================================
 
+// Sector definitions for SIC code lookup + keyword filter
+const SECTORS = {
+  ai: {
+    display: 'Artificial Intelligence',
+    sic: ['7372', '7371', '7389', '8742'],
+    keywords: ['artificial intelligence', 'machine learning', 'LLM', 'large language model',
+               'foundation model', 'generative AI', 'neural network', 'AI platform', 'AI model',
+               'AI research', 'AI assistant'],
+  },
+  cybersecurity: {
+    display: 'Cybersecurity',
+    sic: ['7372', '7371', '7389'],
+    keywords: ['cybersecurity', 'cyber security', 'information security', 'infosec',
+               'endpoint security', 'cloud security', 'zero trust', 'SIEM', 'SOAR',
+               'threat detection', 'vulnerability management', 'SOC'],
+  },
+  biotech: {
+    display: 'Biotechnology',
+    sic: ['2836', '8731', '3841', '8099'],
+    keywords: ['biotech', 'biotechnology', 'drug discovery', 'therapeutics', 'oncology',
+               'gene therapy', 'mRNA', 'clinical trial', 'pharmaceutical', 'pharma',
+               'life sciences'],
+  },
+  fintech: {
+    display: 'Financial Technology',
+    sic: ['6199', '6770', '7372', '7389'],
+    keywords: ['fintech', 'payments platform', 'digital banking', 'neobank', 'lending platform',
+               'embedded finance', 'wealth management platform', 'trading platform'],
+  },
+  space: {
+    display: 'Space & Aerospace',
+    sic: ['3812', '3728', '3669', '3674'],
+    keywords: ['space', 'satellite', 'launch vehicle', 'aerospace', 'orbital', 'spacecraft',
+               'rocket', 'space station'],
+  },
+  climate: {
+    display: 'Climate Tech',
+    sic: ['4911', '3674', '8742'],
+    keywords: ['climate', 'carbon capture', 'renewable energy', 'clean energy', 'solar',
+               'wind power', 'battery storage', 'EV charging', 'emissions reduction'],
+  },
+  crypto: {
+    display: 'Crypto & Web3',
+    sic: ['6199', '7372', '7389'],
+    keywords: ['cryptocurrency', 'blockchain', 'digital asset', 'tokenization', 'DeFi',
+               'web3', 'NFT', 'distributed ledger'],
+  },
+  health: {
+    display: 'Digital Health',
+    sic: ['8000', '8062', '8093', '7389'],
+    keywords: ['digital health', 'telehealth', 'remote patient monitoring', 'health platform',
+               'medical device', 'health data'],
+  },
+  defense: {
+    display: 'Defense Tech',
+    sic: ['3812', '3761', '3728'],
+    keywords: ['defense', 'national security', 'military', 'autonomous systems', 'unmanned',
+               'tactical', 'C4ISR'],
+  },
+};
+
+// Main entry point
 async function fetchData(params) {
-  const { location, type = 'forecast' } = params;
-
-  if (!location) {
-    return { error: 'Missing location' };
-  }
+  const { company, sector, form_type, min_amount, state, date_after, date_before } = params || {};
 
   try {
-    // Step 1: Resolve location to lat/lon
-    const coords = await geocodeLocation(location);
-    if (!coords) {
-      return {
-        card: {
-          kind: 'no_data',
-          location_query: location,
-          message: `I couldn't find "${location}" in NOAA's coverage. NOAA covers US territory only — try a US city, ZIP, or "City, State".`,
-        },
-      };
+    // Path 1: Specific company query (use submissions API for clean filing history)
+    if (company && company.trim()) {
+      return await fetchCompanyFilings({
+        companyName: company,
+        formType: form_type,
+        dateAfter: date_after,
+        dateBefore: date_before,
+      });
     }
 
-    // Step 2: Get the NOAA grid point for those coords
-    const grid = await getGridPoint(coords.lat, coords.lon);
-    if (!grid) {
-      return {
-        card: {
-          kind: 'no_data',
-          location_query: location,
-          coords,
-          message: `Found "${location}" but NOAA doesn't have a forecast grid for those coordinates. May be outside US coverage.`,
-        },
-      };
-    }
-
-    // Step 3: Branch by type
-    if (type === 'alerts') {
-      return await fetchAlerts(coords, grid, location);
-    } else if (type === 'current') {
-      return await fetchCurrent(coords, grid, location);
-    } else {
-      return await fetchForecast(coords, grid, location);
-    }
+    // Path 2: Sector or form-type or generic search (use full-text search)
+    return await fetchFilingsSearch({
+      sector,
+      formType: form_type || (sector ? 'D' : null),
+      minAmount: min_amount ? parseInt(min_amount, 10) : null,
+      state,
+      dateAfter: date_after,
+      dateBefore: date_before,
+    });
   } catch (err) {
     console.error('[fetcher] error', err.message);
     return { error: err.message };
   }
 }
 
-// Common US cities lookup (faster than hitting the Census geocoder)
-const COMMON_CITIES = {
-  'new york': { lat: 40.7128, lon: -74.0060 },
-  'nyc': { lat: 40.7128, lon: -74.0060 },
-  'los angeles': { lat: 34.0522, lon: -118.2437 },
-  'la': { lat: 34.0522, lon: -118.2437 },
-  'chicago': { lat: 41.8781, lon: -87.6298 },
-  'houston': { lat: 29.7604, lon: -95.3698 },
-  'phoenix': { lat: 33.4484, lon: -112.0740 },
-  'philadelphia': { lat: 39.9526, lon: -75.1652 },
-  'san antonio': { lat: 29.4241, lon: -98.4936 },
-  'san diego': { lat: 32.7157, lon: -117.1611 },
-  'dallas': { lat: 32.7767, lon: -96.7970 },
-  'san jose': { lat: 37.3382, lon: -121.8863 },
-  'austin': { lat: 30.2672, lon: -97.7431 },
-  'jacksonville': { lat: 30.3322, lon: -81.6557 },
-  'fort worth': { lat: 32.7555, lon: -97.3308 },
-  'columbus': { lat: 39.9612, lon: -82.9988 },
-  'charlotte': { lat: 35.2271, lon: -80.8431 },
-  'san francisco': { lat: 37.7749, lon: -122.4194 },
-  'sf': { lat: 37.7749, lon: -122.4194 },
-  'indianapolis': { lat: 39.7684, lon: -86.1581 },
-  'seattle': { lat: 47.6062, lon: -122.3321 },
-  'denver': { lat: 39.7392, lon: -104.9903 },
-  'washington': { lat: 38.9072, lon: -77.0369 },
-  'dc': { lat: 38.9072, lon: -77.0369 },
-  'boston': { lat: 42.3601, lon: -71.0589 },
-  'el paso': { lat: 31.7619, lon: -106.4850 },
-  'nashville': { lat: 36.1627, lon: -86.7816 },
-  'detroit': { lat: 42.3314, lon: -83.0458 },
-  'oklahoma city': { lat: 35.4676, lon: -97.5164 },
-  'portland': { lat: 45.5152, lon: -122.6784 },
-  'las vegas': { lat: 36.1699, lon: -115.1398 },
-  'memphis': { lat: 35.1495, lon: -90.0490 },
-  'louisville': { lat: 38.2527, lon: -85.7585 },
-  'baltimore': { lat: 39.2904, lon: -76.6122 },
-  'milwaukee': { lat: 43.0389, lon: -87.9065 },
-  'albuquerque': { lat: 35.0844, lon: -106.6504 },
-  'tucson': { lat: 32.2226, lon: -110.9747 },
-  'fresno': { lat: 36.7378, lon: -119.7871 },
-  'sacramento': { lat: 38.5816, lon: -121.4944 },
-  'kansas city': { lat: 39.0997, lon: -94.5786 },
-  'mesa': { lat: 33.4152, lon: -111.8315 },
-  'atlanta': { lat: 33.7490, lon: -84.3880 },
-  'omaha': { lat: 41.2565, lon: -95.9345 },
-  'colorado springs': { lat: 38.8339, lon: -104.8214 },
-  'raleigh': { lat: 35.7796, lon: -78.6382 },
-  'miami': { lat: 25.7617, lon: -80.1918 },
-  'oakland': { lat: 37.8044, lon: -122.2712 },
-  'minneapolis': { lat: 44.9778, lon: -93.2650 },
-  'tulsa': { lat: 36.1539, lon: -95.9928 },
-  'cleveland': { lat: 41.4993, lon: -81.6944 },
-  'wichita': { lat: 37.6872, lon: -97.3301 },
-  'arlington': { lat: 32.7357, lon: -97.1081 },
-  'new orleans': { lat: 29.9511, lon: -90.0715 },
-  'bakersfield': { lat: 35.3733, lon: -119.0187 },
-  'tampa': { lat: 27.9506, lon: -82.4572 },
-  'honolulu': { lat: 21.3069, lon: -157.8583 },
-  'anaheim': { lat: 33.8366, lon: -117.9143 },
-  'aurora': { lat: 39.7294, lon: -104.8319 },
-  'santa ana': { lat: 33.7455, lon: -117.8677 },
-  'st. louis': { lat: 38.6270, lon: -90.1994 },
-  'st louis': { lat: 38.6270, lon: -90.1994 },
-  'pittsburgh': { lat: 40.4406, lon: -79.9959 },
-  'corpus christi': { lat: 27.8006, lon: -97.3964 },
-  'riverside': { lat: 33.9533, lon: -117.3962 },
-  'cincinnati': { lat: 39.1031, lon: -84.5120 },
-  'lexington': { lat: 38.0406, lon: -84.5037 },
-  'anchorage': { lat: 61.2181, lon: -149.9003 },
-  'stockton': { lat: 37.9577, lon: -121.2908 },
-  'toledo': { lat: 41.6528, lon: -83.5379 },
-  'st. paul': { lat: 44.9537, lon: -93.0900 },
-  'st paul': { lat: 44.9537, lon: -93.0900 },
-  'newark': { lat: 40.7357, lon: -74.1724 },
-  'plano': { lat: 33.0198, lon: -96.6989 },
-  'henderson': { lat: 36.0395, lon: -114.9817 },
-  'lincoln': { lat: 40.8136, lon: -96.7026 },
-  'buffalo': { lat: 42.8864, lon: -78.8784 },
-  'jersey city': { lat: 40.7178, lon: -74.0431 },
-  'chula vista': { lat: 32.6401, lon: -117.0842 },
-  'orlando': { lat: 28.5383, lon: -81.3792 },
-  'norfolk': { lat: 36.8508, lon: -76.2859 },
-  'chandler': { lat: 33.3062, lon: -111.8413 },
-  'laredo': { lat: 27.5306, lon: -99.4803 },
-  'madison': { lat: 43.0731, lon: -89.4012 },
-  'durham': { lat: 35.9940, lon: -78.8986 },
-  'lubbock': { lat: 33.5779, lon: -101.8552 },
-  'reno': { lat: 39.5296, lon: -119.8138 },
-  'baton rouge': { lat: 30.4515, lon: -91.1871 },
-  'irvine': { lat: 33.6846, lon: -117.8265 },
-  'irving': { lat: 32.8140, lon: -96.9489 },
-  'scottsdale': { lat: 33.4942, lon: -111.9261 },
-  'fremont': { lat: 37.5485, lon: -121.9886 },
-  'gilbert': { lat: 33.3528, lon: -111.7890 },
-  'boise': { lat: 43.6150, lon: -116.2023 },
-  'bend': { lat: 44.0582, lon: -121.3153 },
-  // DMV (DC/Maryland/Virginia) — common queries
-  'ashburn': { lat: 39.0438, lon: -77.4875 },
-  'brambleton': { lat: 38.9988, lon: -77.5314 },
-  'leesburg': { lat: 39.1157, lon: -77.5636 },
-  'reston': { lat: 38.9586, lon: -77.3570 },
-  'herndon': { lat: 38.9696, lon: -77.3861 },
-  'sterling': { lat: 39.0062, lon: -77.4286 },
-  'fairfax': { lat: 38.8462, lon: -77.3064 },
-  'arlington va': { lat: 38.8816, lon: -77.0910 },
-  'alexandria': { lat: 38.8048, lon: -77.0469 },
-  'tysons': { lat: 38.9189, lon: -77.2299 },
-  'mclean': { lat: 38.9339, lon: -77.1773 },
-  'bethesda': { lat: 38.9847, lon: -77.0947 },
-  'rockville': { lat: 39.0840, lon: -77.1528 },
-  'silver spring': { lat: 38.9907, lon: -77.0261 },
-};
-
 // ──────────────────────────────────────────────────────────────────────────
-// GEOCODING — three paths in priority order:
-//   1. ZIP code → Zippopotam.us (free, no auth)
-//   2. Common city dictionary → instant, no API call
-//   3. City/place name → Open-Meteo geocoding API (free, no auth)
-//                        With smart state matching when user provides ", VA" etc.
+// COMPANY-MODE FETCH — uses EDGAR full-text search to handle SPVs and aliases
+// (the submissions API only returns the company's own filings, missing the
+//  SPV trail that's the killer demo for names like "Anthropic")
 // ──────────────────────────────────────────────────────────────────────────
 
-// US state name → abbreviation (and abbreviation → name) for state matching
-const STATE_NORMALIZE = {
-  'al': 'alabama', 'alabama': 'alabama',
-  'ak': 'alaska', 'alaska': 'alaska',
-  'az': 'arizona', 'arizona': 'arizona',
-  'ar': 'arkansas', 'arkansas': 'arkansas',
-  'ca': 'california', 'california': 'california',
-  'co': 'colorado', 'colorado': 'colorado',
-  'ct': 'connecticut', 'connecticut': 'connecticut',
-  'de': 'delaware', 'delaware': 'delaware',
-  'fl': 'florida', 'florida': 'florida',
-  'ga': 'georgia', 'georgia': 'georgia',
-  'hi': 'hawaii', 'hawaii': 'hawaii',
-  'id': 'idaho', 'idaho': 'idaho',
-  'il': 'illinois', 'illinois': 'illinois',
-  'in': 'indiana', 'indiana': 'indiana',
-  'ia': 'iowa', 'iowa': 'iowa',
-  'ks': 'kansas', 'kansas': 'kansas',
-  'ky': 'kentucky', 'kentucky': 'kentucky',
-  'la': 'louisiana', 'louisiana': 'louisiana',
-  'me': 'maine', 'maine': 'maine',
-  'md': 'maryland', 'maryland': 'maryland',
-  'ma': 'massachusetts', 'massachusetts': 'massachusetts',
-  'mi': 'michigan', 'michigan': 'michigan',
-  'mn': 'minnesota', 'minnesota': 'minnesota',
-  'ms': 'mississippi', 'mississippi': 'mississippi',
-  'mo': 'missouri', 'missouri': 'missouri',
-  'mt': 'montana', 'montana': 'montana',
-  'ne': 'nebraska', 'nebraska': 'nebraska',
-  'nv': 'nevada', 'nevada': 'nevada',
-  'nh': 'new hampshire', 'new hampshire': 'new hampshire',
-  'nj': 'new jersey', 'new jersey': 'new jersey',
-  'nm': 'new mexico', 'new mexico': 'new mexico',
-  'ny': 'new york', 'new york': 'new york',
-  'nc': 'north carolina', 'north carolina': 'north carolina',
-  'nd': 'north dakota', 'north dakota': 'north dakota',
-  'oh': 'ohio', 'ohio': 'ohio',
-  'ok': 'oklahoma', 'oklahoma': 'oklahoma',
-  'or': 'oregon', 'oregon': 'oregon',
-  'pa': 'pennsylvania', 'pennsylvania': 'pennsylvania',
-  'ri': 'rhode island', 'rhode island': 'rhode island',
-  'sc': 'south carolina', 'south carolina': 'south carolina',
-  'sd': 'south dakota', 'south dakota': 'south dakota',
-  'tn': 'tennessee', 'tennessee': 'tennessee',
-  'tx': 'texas', 'texas': 'texas',
-  'ut': 'utah', 'utah': 'utah',
-  'vt': 'vermont', 'vermont': 'vermont',
-  'va': 'virginia', 'virginia': 'virginia',
-  'wa': 'washington', 'washington': 'washington',
-  'wv': 'west virginia', 'west virginia': 'west virginia',
-  'wi': 'wisconsin', 'wisconsin': 'wisconsin',
-  'wy': 'wyoming', 'wyoming': 'wyoming',
-  'dc': 'district of columbia', 'district of columbia': 'district of columbia',
-};
+async function fetchCompanyFilings({ companyName, formType, dateAfter, dateBefore }) {
+  // Build the search URL — use full-text search since it returns SPV filings
+  // that name-match against the company name in their filer entity name.
+  const params = new URLSearchParams();
+  params.set('q', `"${companyName}"`);
+  if (formType) params.set('forms', formType);
+  if (dateAfter) params.set('dateRange', 'custom');
+  if (dateAfter) params.set('startdt', dateAfter);
+  if (dateBefore) params.set('enddt', dateBefore);
 
-async function geocodeLocation(input) {
-  const raw = String(input || '').trim();
-  const norm = raw.toLowerCase();
+  const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+  console.log('[edgar]', JSON.stringify({ mode: 'company', url, companyName }));
 
-  // Path 1: ZIP code → Zippopotam.us
-  if (/^\d{5}$/.test(norm)) {
-    const result = await geocodeZip(norm);
-    console.log('[geocode]', JSON.stringify({ input: raw, path: 'zip', result }));
-    return result;
-  }
+  const data = await fetchEdgar(url);
+  const hits = data?.hits?.hits || [];
 
-  // Path 2: Common city dictionary (instant, no API call)
-  // Try state-qualified key first ("arlington va"), then plain city ("arlington")
-  // Most disambiguation is unnecessary; a few cities have name collisions
-  // (Arlington TX vs VA, Portland OR vs ME). For those, the state-qualified
-  // entry wins when user provides a state.
-  const cityOnly = norm.replace(/,.*$/, '').trim();
-  const stateSuffix = norm.match(/,\s*([a-z]{2})\s*$/);
-  if (stateSuffix) {
-    const stateKey = `${cityOnly} ${stateSuffix[1]}`;
-    if (COMMON_CITIES[stateKey]) {
-      console.log('[geocode]', JSON.stringify({ input: raw, path: 'common_cities', city: stateKey, result: COMMON_CITIES[stateKey] }));
-      return COMMON_CITIES[stateKey];
-    }
-  }
-  if (COMMON_CITIES[cityOnly]) {
-    console.log('[geocode]', JSON.stringify({ input: raw, path: 'common_cities', city: cityOnly, result: COMMON_CITIES[cityOnly] }));
-    return COMMON_CITIES[cityOnly];
-  }
-
-  // Path 3: Open-Meteo geocoding with smart state matching
-  // Extract state hint from "City, ST" or "City, State" format
-  const stateMatch = raw.match(/,\s*([A-Za-z][A-Za-z\s]*?)\s*$/);
-  const stateHint = stateMatch ? STATE_NORMALIZE[stateMatch[1].toLowerCase().trim()] : null;
-  // Send just the city name to the API (no state — we filter results below)
-  const cityForApi = stateMatch ? raw.slice(0, stateMatch.index).trim() : raw;
-
-  const result = await geocodeOpenMeteo(cityForApi, stateHint);
-  console.log('[geocode]', JSON.stringify({ input: raw, path: 'open_meteo', city: cityForApi, stateHint, result }));
-  return result;
-}
-
-async function geocodeZip(zip) {
-  // Zippopotam.us — free, no auth, takes just a 5-digit ZIP
-  const url = `https://api.zippopotam.us/us/${zip}`;
-  try {
-    const res = await fetchWithTimeout(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const place = data?.places?.[0];
-    if (!place) return null;
+  if (hits.length === 0) {
     return {
-      lat: parseFloat(place.latitude),
-      lon: parseFloat(place.longitude),
+      card: {
+        kind: 'no_data',
+        query_summary: `${companyName}${formType ? ` · ${formType}` : ''}`,
+        message: `Nothing in EDGAR for "${companyName}". Either the spelling is off, or they haven't made an SEC filing.`,
+      },
     };
-  } catch (err) {
-    console.error('[geocodeZip]', err.message);
-    return null;
   }
+
+  // Parse hits into rows
+  const rows = hits.map(h => parseFiling(h, companyName));
+
+  // Detect if this is the "SPV trail" case — many filings, mostly by different
+  // entities, all referencing the same company. If so, group by filer family.
+  const uniqueFilers = new Set(rows.map(r => r.filer_name)).size;
+  const isSpvTrail = rows.length > 10 && uniqueFilers > 5;
+
+  let groups = null;
+  if (isSpvTrail) {
+    groups = groupByFilerFamily(rows);
+  }
+
+  return {
+    card: {
+      kind: 'company_filings',
+      company: companyName,
+      total: data?.hits?.total?.value || rows.length,
+      shown: rows.length,
+      filters: {
+        form_type: formType || null,
+        date_after: dateAfter || null,
+        date_before: dateBefore || null,
+      },
+      rows,
+      groups,
+      is_spv_trail: isSpvTrail,
+    },
+  };
 }
 
-async function geocodeOpenMeteo(cityName, stateHint) {
-  // Open-Meteo — free, no auth, designed for city/place-name lookup
-  // Returns up to 5 results so we can pick the best one
-  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=10&country_code=US&language=en&format=json`;
-  try {
-    const res = await fetchWithTimeout(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const results = data?.results || [];
-    if (results.length === 0) return null;
+// Group filings into filer "families" (Hiive, Augurey, Linqto etc.)
+function groupByFilerFamily(rows) {
+  const families = new Map();
 
-    // If user gave us a state hint, prefer results in that state
-    if (stateHint) {
-      const stateMatched = results.find(r =>
-        r.admin1?.toLowerCase() === stateHint
-      );
-      if (stateMatched) {
-        return { lat: stateMatched.latitude, lon: stateMatched.longitude };
-      }
+  for (const row of rows) {
+    const family = detectFilerFamily(row.filer_name);
+    if (!families.has(family)) {
+      families.set(family, {
+        family_name: family,
+        count: 0,
+        total_amount: 0,
+        latest_filed: null,
+        first_filed: null,
+        forms: new Set(),
+        sample_rows: [],
+      });
     }
-
-    // No state hint or no state match — pick by highest population
-    // (catches the "Ashburn → which Ashburn?" case sensibly without a hint)
-    const sorted = [...results].sort((a, b) =>
-      (b.population || 0) - (a.population || 0)
-    );
-    const top = sorted[0];
-    return { lat: top.latitude, lon: top.longitude };
-  } catch (err) {
-    console.error('[geocodeOpenMeteo]', err.message);
-    return null;
-  }
-}
-
-async function getGridPoint(lat, lon) {
-  const url = `${DATA_SOURCE_URL}/points/${lat.toFixed(4)},${lon.toFixed(4)}`;
-  const data = await fetchNoaa(url);
-  if (!data?.properties) return null;
-  return {
-    forecast: data.properties.forecast,
-    forecastHourly: data.properties.forecastHourly,
-    observationStations: data.properties.observationStations,
-    city: data.properties.relativeLocation?.properties?.city,
-    state: data.properties.relativeLocation?.properties?.state,
-  };
-}
-
-async function fetchForecast(coords, grid, locationQuery) {
-  const data = await fetchNoaa(grid.forecast);
-  const periods = data?.properties?.periods || [];
-
-  return {
-    card: {
-      kind: 'forecast',
-      location: {
-        query: locationQuery,
-        city: grid.city,
-        state: grid.state,
-        lat: coords.lat,
-        lon: coords.lon,
-      },
-      generated_at: data?.properties?.generatedAt,
-      periods: periods.slice(0, 14).map(p => ({
-        name: p.name,
-        is_daytime: p.isDaytime,
-        temperature: p.temperature,
-        temperature_unit: p.temperatureUnit,
-        wind_speed: p.windSpeed,
-        wind_direction: p.windDirection,
-        short_forecast: p.shortForecast,
-        detailed_forecast: p.detailedForecast,
-        icon: p.icon,
-        precipitation_probability: p.probabilityOfPrecipitation?.value || 0,
-      })),
-    },
-  };
-}
-
-async function fetchCurrent(coords, grid, locationQuery) {
-  const stationsData = await fetchNoaa(grid.observationStations);
-  const firstStation = stationsData?.features?.[0]?.id;
-
-  if (!firstStation) {
-    const fc = await fetchForecast(coords, grid, locationQuery);
-    fc.card.kind = 'current_fallback';
-    return fc;
+    const g = families.get(family);
+    g.count++;
+    if (row.amount) g.total_amount += row.amount;
+    g.forms.add(row.form_type);
+    if (!g.latest_filed || row.filed_date > g.latest_filed) g.latest_filed = row.filed_date;
+    if (!g.first_filed || row.filed_date < g.first_filed) g.first_filed = row.filed_date;
+    if (g.sample_rows.length < 3) g.sample_rows.push(row);
   }
 
-  const obs = await fetchNoaa(`${firstStation}/observations/latest`);
-  const props = obs?.properties || {};
+  // Sort: largest count first, then by total amount
+  return [...families.values()]
+    .map(g => ({ ...g, forms: [...g.forms] }))
+    .sort((a, b) => b.count - a.count || b.total_amount - a.total_amount);
+}
+
+function detectFilerFamily(filerName) {
+  const lower = filerName.toLowerCase();
+  // Check known SPV families in priority order
+  if (lower.includes('hiive')) return 'Hiive';
+  if (lower.includes('augurey')) return 'Augurey Ventures';
+  if (lower.includes('linqto')) return 'Linqto Liquidshares';
+  if (lower.includes('cgf2021')) return 'CGF2021 SPV Family';
+  if (lower.includes('mav alternate')) return 'MAV Alternate';
+  if (lower.includes('mw lsvc')) return 'MW LSVC';
+  if (lower.includes('hii ')) return 'HII';
+  if (lower.includes('id funds')) return 'ID Funds';
+  if (lower.includes('edge partners')) return 'Edge Partners';
+  if (lower.includes('iron pine')) return 'Iron Pine';
+  if (lower.includes('ibd ventures')) return 'IBD Ventures';
+  if (lower.includes('ineffable')) return 'Ineffable Ventures';
+  if (lower.includes('venelite')) return 'Venelite';
+  if (lower.includes('e1 ventures')) return 'E1 Ventures';
+  if (lower.includes('pachamama')) return 'Pachamama Capital';
+  if (lower.includes('aurum vp')) return 'Aurum VP';
+  if (lower.includes('myasiavc')) return 'MyAsiaVC';
+  if (lower.includes('zzg capital')) return 'ZZG Capital';
+  if (lower.includes('nuvion')) return 'Nuvion';
+  if (lower.includes('starbridge')) return 'Starbridge';
+  if (lower.includes('stonks')) return 'Stonks SPVs';
+  if (lower.includes('ventioneers')) return 'Ventioneers';
+  if (lower.includes('arden')) return 'Arden';
+  if (lower.includes('7gc')) return '7GC & Co.';
+  if (lower.includes('mayavalley') || lower.includes('ssd spv')) return 'Mayavalley / SSD';
+  if (lower.includes('rvc anthropic') || lower.includes('rvc ')) return 'RVC';
+  if (lower.includes('okami')) return 'Okami';
+  if (lower.includes('scenic')) return 'Scenic';
+  if (lower.includes('lfg ')) return 'LFG';
+  if (lower.includes('kaleida')) return 'Kaleida Capital';
+  if (lower.includes('invext')) return 'INVEXT';
+  if (lower.includes('bloom opportunities')) return 'Bloom Opportunities';
+  if (lower.includes('incepto')) return 'Incepto AGI';
+  if (lower.includes('dv anthropic')) return 'DV Anthropic';
+
+  // Fallback: use first 3 words of the filer name
+  const words = filerName.split(/[\s,]+/).slice(0, 3).join(' ');
+  return words || filerName;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// SEARCH-MODE FETCH — sector + form + date filters
+// ──────────────────────────────────────────────────────────────────────────
+
+async function fetchFilingsSearch({ sector, formType, minAmount, state, dateAfter, dateBefore }) {
+  const params = new URLSearchParams();
+
+  // Build query
+  const queryParts = [];
+  if (sector && SECTORS[sector]) {
+    const sectorDef = SECTORS[sector];
+    queryParts.push(sectorDef.keywords.map(k => `"${k}"`).join(' OR '));
+  }
+
+  if (queryParts.length > 0) {
+    params.set('q', queryParts.join(' '));
+  }
+
+  if (formType) params.set('forms', formType);
+  if (dateAfter) {
+    params.set('dateRange', 'custom');
+    params.set('startdt', dateAfter);
+  }
+  if (dateBefore) {
+    params.set('dateRange', 'custom');
+    params.set('enddt', dateBefore);
+  }
+
+  const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+  console.log('[edgar]', JSON.stringify({ mode: 'search', url, sector, formType }));
+
+  const data = await fetchEdgar(url);
+  let rows = (data?.hits?.hits || []).map(h => parseFiling(h, null));
+
+  // Apply min_amount filter (post-fetch since EDGAR doesn't support it directly)
+  if (minAmount) {
+    rows = rows.filter(r => r.amount && r.amount >= minAmount);
+  }
+
+  // Apply state filter
+  if (state) {
+    rows = rows.filter(r => r.state_of_inc === state);
+  }
+
+  if (rows.length === 0) {
+    return {
+      card: {
+        kind: 'no_data',
+        query_summary: buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }),
+        message: 'No filings matched those filters. Try widening the date range, removing the amount filter, or checking back later — Form Ds run on a 15-day filing window.',
+      },
+    };
+  }
 
   return {
     card: {
-      kind: 'current',
-      location: {
-        query: locationQuery,
-        city: grid.city,
-        state: grid.state,
-        lat: coords.lat,
-        lon: coords.lon,
+      kind: 'filings_list',
+      query_summary: buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }),
+      total: data?.hits?.total?.value || rows.length,
+      shown: rows.length,
+      filters: {
+        sector: sector ? { key: sector, display: SECTORS[sector]?.display } : null,
+        form_type: formType || null,
+        min_amount: minAmount || null,
+        state: state || null,
+        date_after: dateAfter || null,
+        date_before: dateBefore || null,
       },
-      observed_at: props.timestamp,
-      temperature_c: props.temperature?.value,
-      humidity_pct: props.relativeHumidity?.value,
-      wind_speed_kph: props.windSpeed?.value,
-      wind_direction: props.windDirection?.value,
-      pressure_pa: props.barometricPressure?.value,
-      visibility_m: props.visibility?.value,
-      description: props.textDescription,
-      station_id: firstStation,
+      rows: rows.slice(0, 100),
     },
   };
 }
 
-async function fetchAlerts(coords, grid, locationQuery) {
-  const url = `${DATA_SOURCE_URL}/alerts/active?point=${coords.lat.toFixed(4)},${coords.lon.toFixed(4)}`;
-  const data = await fetchNoaa(url);
-  const features = data?.features || [];
+function buildQuerySummary({ sector, formType, minAmount, state, dateAfter, dateBefore }) {
+  const parts = [];
+  if (sector && SECTORS[sector]) parts.push(SECTORS[sector].display);
+  if (formType) parts.push(`Form ${formType}`);
+  if (minAmount) parts.push(`above $${(minAmount / 1_000_000).toFixed(0)}M`);
+  if (state) parts.push(state);
+  if (dateAfter && dateBefore) parts.push(`${dateAfter} to ${dateBefore}`);
+  else if (dateAfter) parts.push(`since ${dateAfter}`);
+  else if (dateBefore) parts.push(`through ${dateBefore}`);
+  return parts.join(' · ') || 'All filings';
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// FILING PARSER
+// ──────────────────────────────────────────────────────────────────────────
+
+function parseFiling(hit, contextCompanyName) {
+  const src = hit._source || {};
+  const id = hit._id || '';
+
+  // Filer name + CIK — search results put the filer in display_names array
+  const displayName = (src.display_names || [])[0] || src.entity_name || 'Unknown filer';
+  const ciks = src.ciks || [];
+
+  // Form type
+  const formType = src.form || src.adsh?.split('-')[0] || '?';
+
+  // Filed date
+  const filedDate = src.file_date || src.adsh_filed || null;
+
+  // Offering amount (Form D specific) — pulled from XBRL if present
+  let amount = null;
+  if (src.offering_amount) {
+    amount = parseInt(src.offering_amount, 10);
+  } else if (src.xbrl_total_offering_amount) {
+    amount = parseInt(src.xbrl_total_offering_amount, 10);
+  }
+
+  // State of incorporation
+  const stateOfInc = src.state_of_inc || src.state_inc || null;
+
+  // Build EDGAR document link
+  const accession = src.adsh || id;
+  const accNoDashes = String(accession).replace(/-/g, '');
+  const docLink = ciks[0]
+    ? `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&CIK=${ciks[0]}&type=${formType}`
+    : `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany`;
 
   return {
-    card: {
-      kind: 'alerts',
-      location: {
-        query: locationQuery,
-        city: grid.city,
-        state: grid.state,
-        lat: coords.lat,
-        lon: coords.lon,
-      },
-      generated_at: data?.updated,
-      alert_count: features.length,
-      alerts: features.slice(0, 5).map(f => ({
-        event: f.properties?.event,
-        severity: f.properties?.severity,
-        certainty: f.properties?.certainty,
-        urgency: f.properties?.urgency,
-        headline: f.properties?.headline,
-        description: f.properties?.description,
-        instruction: f.properties?.instruction,
-        effective: f.properties?.effective,
-        expires: f.properties?.expires,
-      })),
-    },
+    filer_name: cleanFilerName(displayName),
+    cik: ciks[0] || null,
+    form_type: formType,
+    filed_date: filedDate,
+    amount,
+    state_of_inc: stateOfInc,
+    accession,
+    doc_link: docLink,
   };
 }
 
-async function fetchWithTimeout(url, opts = {}) {
+function cleanFilerName(raw) {
+  // EDGAR display names sometimes include  "(0001234567) (Filer)" suffix
+  return String(raw)
+    .replace(/\s*\(\d+\)\s*\(Filer\)\s*$/, '')
+    .replace(/\s*\(\d+\)\s*$/, '')
+    .trim();
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// EDGAR HTTP CLIENT
+// ──────────────────────────────────────────────────────────────────────────
+
+async function fetchEdgar(url) {
+  const u = new URL(url);
+  if (!ALLOWED_HOSTS.includes(u.hostname)) {
+    throw new Error(`Host not in allowlist: ${u.hostname}`);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { ...opts, signal: controller.signal });
-    return res;
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': DATA_SOURCE_USER_AGENT,
+        'Accept': 'application/json',
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`EDGAR ${res.status}: ${url}`);
+    }
+    return await res.json();
   } finally {
     clearTimeout(timeoutId);
   }
-}
-
-async function fetchNoaa(url) {
-  const res = await fetchWithTimeout(url, {
-    headers: {
-      'User-Agent': DATA_SOURCE_USER_AGENT,
-      'Accept': 'application/geo+json',
-    },
-  });
-  if (!res.ok) {
-    throw new Error(`NOAA ${res.status}: ${url}`);
-  }
-  return res.json();
 }
 
 
@@ -1261,7 +1161,6 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
     }));
   };
 
-  // Rate limit
   const limit = checkRateLimit(ip);
   if (!limit.allowed) {
     logReq('rate_limited', { reason: limit.reason });
@@ -1269,14 +1168,12 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
     return;
   }
 
-  // Body validation
   if (!body || !requestType || requestType === '(none)') {
     logReq('bad_request', { error: 'missing_request_type' });
     writeJsonResponse(responseStream, 400, { error: 'Missing request_type' });
     return;
   }
 
-  // Route
   try {
     switch (requestType) {
       case 'stream':

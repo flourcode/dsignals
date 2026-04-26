@@ -25,8 +25,17 @@ window.MO_CONFIG = {
   // ---- Identity ----
   productName: 'mo-signals',
   displayName: 'Mo',
-  tagline: "She's plugged into NOAA Weather (for now).",
-  greeting: "What's the weather where you are?",
+  pageTitle: 'Mo · SEC Filings',
+  tagline: "She lives inside SEC EDGAR.",
+  greeting: "What private company are you watching?",
+
+  // ---- Example queries shown as tappable chips on the greeting screen ----
+  exampleQueries: [
+    "Anthropic filing history",
+    "AI raises last month",
+    "Stripe in 2024",
+    "What's a Form D?",
+  ],
 
   // ---- The human behind Mo ----
   meetWith: {
@@ -36,7 +45,7 @@ window.MO_CONFIG = {
   },
 
   // ---- API Endpoint ----
-  // Set this AFTER you create your Lambda Function URL.
+  // Same Lambda Function URL as Hello World — we're just swapping brains
   apiEndpoint: 'https://4yjfpnei2qnulzfcyrunh564qy0mxptv.lambda-url.us-east-1.on.aws/',
 
   // ---- Theme ----
@@ -48,10 +57,9 @@ window.MO_CONFIG = {
   },
 
   // ---- Data Source attribution ----
-  // Shown in card footers. Should match the lambda's DATA_SOURCE_NAME.
   dataSource: {
-    name: 'NOAA Weather',
-    url: 'https://api.weather.gov',
+    name: 'SEC EDGAR',
+    url: 'https://www.sec.gov/edgar',
   },
 
   // ---- Pills ----

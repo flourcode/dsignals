@@ -1,24 +1,37 @@
 // ============================================================================
-// card-renderer.js — Skill-specific card layouts for NOAA Weather
+// card-renderer.js — Skill-specific card layouts for SEC EDGAR
 // ============================================================================
 //
-// THIS IS A SKILL-SPECIFIC FILE. When you fork this template to build a
-// different Mo, you replace this file with one that knows how to render
-// YOUR data source's card kinds.
+// Card kinds for SEC EDGAR Mo:
 //
-// What this file must export:
-//   - window.CardRenderer.render(card) → returns an HTMLElement
+//   1. company_filings    — single-company filing history
+//                            Special: SPV trail mode when 10+ filings from
+//                            different filers (the killer Anthropic demo)
 //
-// What "card" looks like:
-//   - Whatever your fetcher.mjs returned. Convention: { kind: '...', ... }
-//   - kind switches between layout variants (forecast, current, alerts, no_data)
+//   2. filings_list       — sector / form-type / date-filtered search results
+//                            Top filings sorted by relevance + date
 //
-// The card body is yours. The card frame (border, shadow, padding) is in the
-// shell's styles.css.
+//   3. no_data            — search returned nothing
+//
+// Visual goals:
+//   - Inline density: filer, form, date, amount visible at a glance
+//   - Hierarchy: when grouped, group headers stand out above individual rows
+//   - Mobile-first: works on a 360px-wide screen without horizontal scroll
+//   - Verifiable: every row links to the actual EDGAR filing
 // ============================================================================
 
 (function () {
   'use strict';
+
+  // ── HTML helpers ──────────────────────────────────────────────────────────
+
+  const escapeHtml = (s) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
 
   const html = (strings, ...values) => {
     let out = '';
@@ -26,7 +39,6 @@
       out += strings[i];
       if (i < values.length) {
         const v = values[i];
-        // Auto-escape anything that isn't already marked as safe
         out += (v && v.__safe) ? v.toString() : escapeHtml(String(v ?? ''));
       }
     }
@@ -39,239 +51,226 @@
     return s;
   };
 
-  const escapeHtml = (s) =>
-    String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
   const fromHtml = (htmlStr) => {
     const tpl = document.createElement('template');
     tpl.innerHTML = htmlStr.trim();
     return tpl.content.firstChild;
   };
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Public entry: render(card) → HTMLElement
-  // ──────────────────────────────────────────────────────────────────────────
+  const fmtMoney = (amount) => {
+    if (!amount && amount !== 0) return null;
+    if (amount >= 1_000_000_000) return `$${(amount / 1_000_000_000).toFixed(1)}B`;
+    if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
+    if (amount >= 1_000) return `$${(amount / 1_000).toFixed(0)}K`;
+    return `$${amount.toLocaleString()}`;
+  };
+
+  const fmtDate = (d) => {
+    if (!d) return '';
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return d;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+  };
+
+  // ── Public entry ──────────────────────────────────────────────────────────
 
   function render(card) {
     if (!card) return renderError('No card data');
     switch (card.kind) {
-      case 'forecast':         return renderForecast(card);
-      case 'current':          return renderCurrent(card);
-      case 'current_fallback': return renderForecast(card); // Fall through to forecast
-      case 'alerts':           return renderAlerts(card);
-      case 'no_data':          return renderNoData(card);
-      default:                 return renderError(`Unknown card kind: ${card.kind}`);
+      case 'company_filings': return renderCompanyFilings(card);
+      case 'filings_list':    return renderFilingsList(card);
+      case 'no_data':         return renderNoData(card);
+      default:                return renderError(`Unknown card kind: ${card.kind}`);
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Forecast (multi-day)
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── Company filings ───────────────────────────────────────────────────────
 
-  function renderForecast(card) {
-    const loc = card.location || {};
-    const where = loc.city && loc.state
-      ? `${loc.city}, ${loc.state}`
-      : (loc.query || 'Unknown');
-
-    const periods = (card.periods || []).slice(0, 14);
-    const now = periods[0];
-    const dataSource = window.MO_CONFIG?.dataSource?.name || 'NOAA';
-
-    const periodsHtml = periods.map(p => {
-      const tempStr = `${p.temperature}°${p.temperature_unit || 'F'}`;
-      const precip = p.precipitation_probability > 0
-        ? ` · ${p.precipitation_probability}% rain`
-        : '';
-      return html`
-        <div class="card-row">
-          <div class="card-row-name">
-            <div style="font-weight: 500;">${p.name}</div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${p.short_forecast}${precip}</div>
-          </div>
-          <div class="card-row-detail" style="font-size: 16px; color: var(--text-title); font-weight: 500;">${tempStr}</div>
-        </div>
-      `;
-    }).join('');
-
-    return fromHtml(html`
-      <div class="card-forecast">
-        <h3 class="card-title">${where}</h3>
-        <p class="card-subtitle">${periods.length}-period forecast · NOAA</p>
-
-        ${safe(now ? html`
-          <div class="card-stat-row">
-            <div class="card-stat">
-              <div class="card-stat-value">${now.temperature}°</div>
-              <div class="card-stat-label">${now.name}</div>
-            </div>
-            <div class="card-stat">
-              <div class="card-stat-value" style="font-size: 14px; font-weight: 500; color: var(--text-body); padding-top: 6px;">${now.short_forecast}</div>
-              <div class="card-stat-label">Conditions</div>
-            </div>
-            <div class="card-stat">
-              <div class="card-stat-value" style="font-size: 14px; font-weight: 500; color: var(--text-body); padding-top: 6px;">${now.wind_speed} ${now.wind_direction || ''}</div>
-              <div class="card-stat-label">Wind</div>
-            </div>
-          </div>
-        ` : '')}
-
-        <div class="card-list">${safe(periodsHtml)}</div>
-
-        <div class="card-footer">
-          <span>Source: ${dataSource}</span>
-          <span>Lat ${loc.lat?.toFixed(2)}, Lon ${loc.lon?.toFixed(2)}</span>
-        </div>
-      </div>
-    `);
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Current conditions
-  // ──────────────────────────────────────────────────────────────────────────
-
-  function renderCurrent(card) {
-    const loc = card.location || {};
-    const where = loc.city && loc.state
-      ? `${loc.city}, ${loc.state}`
-      : (loc.query || 'Unknown');
-
-    const tempC = card.temperature_c;
-    const tempF = tempC != null ? Math.round(tempC * 9 / 5 + 32) : null;
-    const humidity = card.humidity_pct != null ? Math.round(card.humidity_pct) : null;
-    const windKph = card.wind_speed_kph != null ? Math.round(card.wind_speed_kph) : null;
-    const windMph = windKph != null ? Math.round(windKph * 0.621371) : null;
-    const observedAt = card.observed_at ? new Date(card.observed_at).toLocaleString() : 'Unknown';
-    const dataSource = window.MO_CONFIG?.dataSource?.name || 'NOAA';
-
-    return fromHtml(html`
-      <div class="card-current">
-        <h3 class="card-title">${where}</h3>
-        <p class="card-subtitle">Current conditions · ${card.description || 'Observed'}</p>
-
-        <div class="card-stat-row">
-          ${safe(tempF != null ? html`
-            <div class="card-stat">
-              <div class="card-stat-value">${tempF}°F</div>
-              <div class="card-stat-label">Temperature</div>
-            </div>
-          ` : '')}
-          ${safe(humidity != null ? html`
-            <div class="card-stat">
-              <div class="card-stat-value">${humidity}%</div>
-              <div class="card-stat-label">Humidity</div>
-            </div>
-          ` : '')}
-          ${safe(windMph != null ? html`
-            <div class="card-stat">
-              <div class="card-stat-value">${windMph} mph</div>
-              <div class="card-stat-label">Wind</div>
-            </div>
-          ` : '')}
-        </div>
-
-        <div class="card-footer">
-          <span>Source: ${dataSource}</span>
-          <span>Observed ${observedAt}</span>
-        </div>
-      </div>
-    `);
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Active alerts
-  // ──────────────────────────────────────────────────────────────────────────
-
-  function renderAlerts(card) {
-    const loc = card.location || {};
-    const where = loc.city && loc.state
-      ? `${loc.city}, ${loc.state}`
-      : (loc.query || 'Unknown');
-
-    const alerts = card.alerts || [];
-    const dataSource = window.MO_CONFIG?.dataSource?.name || 'NOAA';
-
-    if (alerts.length === 0) {
-      return fromHtml(html`
-        <div class="card-alerts">
-          <h3 class="card-title">${where}</h3>
-          <p class="card-subtitle">No active alerts</p>
-          <p style="color: var(--text-body); margin: 16px 0 0;">All clear right now. NOAA isn't tracking any active warnings, watches, or advisories for this location.</p>
-          <div class="card-footer">
-            <span>Source: ${dataSource}</span>
-          </div>
-        </div>
-      `);
+  function renderCompanyFilings(card) {
+    if (card.is_spv_trail && card.groups && card.groups.length > 0) {
+      return renderSpvTrail(card);
     }
+    return renderFlatFilings(card);
+  }
 
-    const alertsHtml = alerts.map(a => {
-      const severityColor = {
-        Extreme: '#7A2020',
-        Severe: '#A14820',
-        Moderate: '#7A5520',
-        Minor: '#4A475A',
-      }[a.severity] || '#4A475A';
+  function renderSpvTrail(card) {
+    const company = card.company || 'Company';
+    const total = card.total || card.shown || 0;
+    const groupCount = card.groups.length;
+
+    const groupsHtml = card.groups.map(g => {
+      const totalAmt = g.total_amount > 0 ? fmtMoney(g.total_amount) : null;
+      const dateRange = g.first_filed && g.latest_filed && g.first_filed !== g.latest_filed
+        ? `${fmtDate(g.first_filed)} → ${fmtDate(g.latest_filed)}`
+        : fmtDate(g.latest_filed);
+      const formsList = (g.forms || []).slice(0, 4).join(', ');
 
       return html`
-        <div class="card-row" style="flex-direction: column; align-items: flex-start; gap: 6px;">
-          <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-            <span style="background: ${safe(severityColor)}; color: white; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.04em;">${a.severity || 'Alert'}</span>
-            <span style="font-weight: 500; color: var(--text-title);">${a.event}</span>
+        <div class="sec-group">
+          <div class="sec-group-head">
+            <div class="sec-group-name">${g.family_name}</div>
+            <div class="sec-group-meta">
+              <span class="sec-group-count">${g.count} filing${g.count === 1 ? '' : 's'}</span>
+              ${safe(totalAmt ? `<span class="sec-group-amount">${escapeHtml(totalAmt)}</span>` : '')}
+            </div>
           </div>
-          <div style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
-            ${a.headline}
+          <div class="sec-group-detail">
+            <span>${formsList}</span>
+            <span class="sec-group-dates">${dateRange}</span>
           </div>
         </div>
       `;
     }).join('');
 
     return fromHtml(html`
-      <div class="card-alerts">
-        <h3 class="card-title">${where}</h3>
-        <p class="card-subtitle">${alerts.length} active alert${alerts.length === 1 ? '' : 's'}</p>
-        <div class="card-list">${safe(alertsHtml)}</div>
-        <div class="card-footer">
-          <span>Source: ${dataSource}</span>
+      <div class="sec-card sec-card-spv">
+        <div class="sec-card-head">
+          <h3 class="sec-card-title">${company}</h3>
+          <div class="sec-card-summary">
+            <span class="sec-pill-label">SPV trail</span>
+            <span>${total} filing${total === 1 ? '' : 's'} across ${groupCount} filer ${groupCount === 1 ? 'family' : 'families'}</span>
+          </div>
+        </div>
+
+        <div class="sec-groups">${safe(groupsHtml)}</div>
+
+        <div class="sec-card-foot">
+          <span>Source: SEC EDGAR</span>
+          <span class="sec-card-foot-note">${total > card.shown ? `Showing top ${card.shown} of ${total}` : `All ${total} filings shown`}</span>
         </div>
       </div>
     `);
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // No data found (geocoding failed, location outside NOAA coverage, etc.)
-  // ──────────────────────────────────────────────────────────────────────────
+  function renderFlatFilings(card) {
+    const company = card.company || 'Company';
+    const total = card.total || card.shown || 0;
+    const rows = card.rows || [];
+
+    const filterChips = buildFilterChips(card.filters);
+
+    const rowsHtml = rows.slice(0, 30).map(r => {
+      const amtHtml = r.amount
+        ? `<span class="sec-row-amount">${escapeHtml(fmtMoney(r.amount))}</span>`
+        : '<span class="sec-row-amount sec-row-amount-empty">—</span>';
+      return html`
+        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row">
+          <div class="sec-row-form">${r.form_type || '?'}</div>
+          <div class="sec-row-main">
+            <div class="sec-row-filer">${r.filer_name || ''}</div>
+            <div class="sec-row-meta">${fmtDate(r.filed_date)}${r.state_of_inc ? ` · ${r.state_of_inc}` : ''}</div>
+          </div>
+          ${safe(amtHtml)}
+        </a>
+      `;
+    }).join('');
+
+    return fromHtml(html`
+      <div class="sec-card">
+        <div class="sec-card-head">
+          <h3 class="sec-card-title">${company}</h3>
+          <div class="sec-card-summary">
+            <span>${total} filing${total === 1 ? '' : 's'}</span>
+            ${safe(filterChips)}
+          </div>
+        </div>
+
+        <div class="sec-rows">${safe(rowsHtml)}</div>
+
+        <div class="sec-card-foot">
+          <span>Source: SEC EDGAR</span>
+          <span class="sec-card-foot-note">${rows.length < total ? `Showing top ${rows.length} of ${total}` : `All ${total} shown`}</span>
+        </div>
+      </div>
+    `);
+  }
+
+  // ── Filings list (sector / search results) ────────────────────────────────
+
+  function renderFilingsList(card) {
+    const summary = card.query_summary || 'Filings';
+    const total = card.total || card.shown || 0;
+    const rows = card.rows || [];
+
+    const filterChips = buildFilterChips(card.filters);
+
+    const rowsHtml = rows.slice(0, 30).map(r => {
+      const amtHtml = r.amount
+        ? `<span class="sec-row-amount">${escapeHtml(fmtMoney(r.amount))}</span>`
+        : '<span class="sec-row-amount sec-row-amount-empty">—</span>';
+      return html`
+        <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row">
+          <div class="sec-row-form">${r.form_type || '?'}</div>
+          <div class="sec-row-main">
+            <div class="sec-row-filer">${r.filer_name || 'Unknown filer'}</div>
+            <div class="sec-row-meta">${fmtDate(r.filed_date)}${r.state_of_inc ? ` · ${r.state_of_inc}` : ''}</div>
+          </div>
+          ${safe(amtHtml)}
+        </a>
+      `;
+    }).join('');
+
+    return fromHtml(html`
+      <div class="sec-card">
+        <div class="sec-card-head">
+          <h3 class="sec-card-title">${summary}</h3>
+          <div class="sec-card-summary">
+            <span>${total} filing${total === 1 ? '' : 's'}</span>
+            ${safe(filterChips)}
+          </div>
+        </div>
+
+        <div class="sec-rows">${safe(rowsHtml)}</div>
+
+        <div class="sec-card-foot">
+          <span>Source: SEC EDGAR</span>
+          <span class="sec-card-foot-note">${rows.length < total ? `Showing top ${rows.length} of ${total}` : `All ${total} shown`}</span>
+        </div>
+      </div>
+    `);
+  }
+
+  // ── Filter chips ──────────────────────────────────────────────────────────
+
+  function buildFilterChips(filters) {
+    if (!filters) return '';
+    const chips = [];
+    if (filters.sector?.display) chips.push(filters.sector.display);
+    if (filters.form_type) chips.push(`Form ${filters.form_type}`);
+    if (filters.min_amount) chips.push(`≥ $${(filters.min_amount / 1_000_000).toFixed(0)}M`);
+    if (filters.state) chips.push(filters.state);
+    if (filters.date_after && filters.date_before) chips.push(`${filters.date_after} → ${filters.date_before}`);
+    else if (filters.date_after) chips.push(`Since ${filters.date_after}`);
+    else if (filters.date_before) chips.push(`Through ${filters.date_before}`);
+
+    if (chips.length === 0) return '';
+    return chips.map(c => `<span class="sec-filter-chip">${escapeHtml(c)}</span>`).join('');
+  }
+
+  // ── No data ───────────────────────────────────────────────────────────────
 
   function renderNoData(card) {
     return fromHtml(html`
-      <div class="card-no-data">
-        <svg class="card-no-data-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="8" x2="12" y2="12"/>
-          <line x1="12" y1="16" x2="12.01" y2="16"/>
+      <div class="sec-card sec-card-empty">
+        <svg class="sec-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          <line x1="11" y1="8" x2="11" y2="11"/>
+          <line x1="11" y1="14" x2="11.01" y2="14"/>
         </svg>
-        <p class="card-no-data-message">${card.message || `No data for "${card.location_query || 'that location'}"`}</p>
+        <div class="sec-empty-title">No filings found</div>
+        ${safe(card.query_summary ? `<div class="sec-empty-summary">${escapeHtml(card.query_summary)}</div>` : '')}
+        <div class="sec-empty-message">${escapeHtml(card.message || 'No matches for that query.')}</div>
       </div>
     `);
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Error fallback
-  // ──────────────────────────────────────────────────────────────────────────
+  // ── Error fallback ────────────────────────────────────────────────────────
 
   function renderError(msg) {
-    return fromHtml(html`
-      <div class="mo-error">${msg}</div>
-    `);
+    return fromHtml(html`<div class="mo-error">${msg}</div>`);
   }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // Export to global namespace (no module bundler in this project)
-  // ──────────────────────────────────────────────────────────────────────────
 
   window.CardRenderer = { render };
 
