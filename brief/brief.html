@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dsignals · Weekly Brief</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../styles.css">
+  <style>
+    body {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 32px 16px 80px;
+      background: var(--bg-screen);
+      color: var(--text-body);
+      font-family: var(--font);
+      line-height: 1.5;
+    }
+
+    .brief-header {
+      margin-bottom: 32px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brief-header h1 {
+      font-size: 26px;
+      font-weight: 600;
+      margin: 0 0 4px;
+      color: var(--text-title);
+      letter-spacing: -0.02em;
+    }
+    .brief-header .subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .stage-controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+
+    .stage-controls input[type="date"] {
+      padding: 8px 12px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border);
+      font-family: inherit;
+      font-size: 13px;
+      background: white;
+      color: var(--text-title);
+    }
+    .stage-controls label {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .stage-controls input[type="number"] {
+      padding: 8px 12px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--border);
+      font-family: inherit;
+      font-size: 13px;
+      background: white;
+      color: var(--text-title);
+      width: 70px;
+    }
+
+    .btn-primary {
+      padding: 10px 20px;
+      background: var(--primary-100);
+      color: white;
+      border: none;
+      border-radius: var(--radius-pill);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn-primary:hover { background: var(--primary-80); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-secondary {
+      padding: 8px 16px;
+      background: var(--bg-tint);
+      color: var(--text-title);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      font-size: 13px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .btn-secondary:hover { background: var(--primary-20); }
+
+    .stage-status {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+
+    .bucket-counts {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 16px 0;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .bucket-counts span {
+      padding: 4px 10px;
+      background: var(--bg-tint);
+      border-radius: var(--radius-pill);
+    }
+
+    /* Candidate cards */
+    .candidates {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .candidate {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: all 120ms ease;
+      position: relative;
+    }
+    .candidate:hover { border-color: var(--primary-60); }
+    .candidate.picked {
+      border-color: var(--primary-100);
+      background: var(--primary-20);
+    }
+    .candidate.picked::after {
+      content: '✓';
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      width: 22px;
+      height: 22px;
+      background: var(--primary-100);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .candidate-bucket {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      margin-bottom: 4px;
+    }
+    .candidate-headline {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-title);
+      margin-bottom: 8px;
+      padding-right: 32px;
+    }
+    .candidate-samples {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      line-height: 1.4;
+    }
+
+    .draft-controls {
+      margin: 24px 0 16px;
+      padding: 16px;
+      background: var(--bg-tint);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .draft-controls .pick-count {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-title);
+      flex: 1;
+      min-width: 200px;
+    }
+
+    /* Output area */
+    .output-area {
+      margin-top: 24px;
+    }
+    .output-toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .output-pre {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 12px;
+      color: var(--text-body);
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.5;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    .empty-state {
+      padding: 32px 16px;
+      text-align: center;
+      color: var(--text-faint);
+      font-size: 13px;
+      font-style: italic;
+    }
+
+    .stage-divider {
+      margin: 32px 0 16px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .stage-divider h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 4px;
+      color: var(--text-title);
+    }
+    .stage-divider p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+
+<div class="brief-header">
+  <h1>dsignals · Weekly Brief</h1>
+  <div class="subtitle">Find candidate signals for this week's Substack issue. Pick three. Get a draft.</div>
+</div>
+
+<!-- Stage 1: gather candidates -->
+<div class="stage-1">
+  <div class="stage-controls">
+    <label>Issue #
+      <input type="number" id="issue-num" value="1" min="1" max="999">
+    </label>
+    <label>Since
+      <input type="date" id="since-date">
+    </label>
+    <button class="btn-primary" id="find-candidates">Find this week's signals</button>
+  </div>
+  <div class="stage-status" id="stage-1-status"></div>
+  <div class="bucket-counts" id="bucket-counts" hidden></div>
+</div>
+
+<!-- Stage 1.5: candidate picker -->
+<div class="stage-divider" id="picker-divider" hidden>
+  <h2>Candidates</h2>
+  <p>Click 3 to pick. Click again to unpick.</p>
+</div>
+<div class="candidates" id="candidates"></div>
+
+<!-- Stage 2: draft generation -->
+<div class="draft-controls" id="draft-controls" hidden>
+  <span class="pick-count" id="pick-count">Pick 3 signals</span>
+  <button class="btn-primary" id="generate-draft" disabled>Draft these signals</button>
+</div>
+
+<!-- Stage 3: output -->
+<div class="stage-divider" id="output-divider" hidden>
+  <h2>Draft</h2>
+  <p>Edit in place, then copy to Substack.</p>
+</div>
+<div class="output-area" id="output-area" hidden>
+  <div class="output-toolbar">
+    <button class="btn-secondary" id="copy-md">Copy markdown</button>
+    <button class="btn-secondary" id="reroll">Re-roll</button>
+  </div>
+  <pre class="output-pre" id="output-pre" contenteditable="true"></pre>
+</div>
+
+<script src="../config.js"></script>
+<script>
+'use strict';
+
+const apiEndpoint = window.MO_CONFIG?.apiEndpoint;
+if (!apiEndpoint) {
+  document.body.innerHTML += '<div style="color: red; padding: 16px;">No apiEndpoint in config.js</div>';
+}
+
+// Default since date = last Sunday (so brief covers Sun-Sun)
+const today = new Date();
+const dayOfWeek = today.getDay();
+const lastSunday = new Date(today);
+lastSunday.setDate(today.getDate() - (dayOfWeek === 0 ? 7 : dayOfWeek));
+document.getElementById('since-date').value = lastSunday.toISOString().slice(0, 10);
+
+let candidatesData = [];
+let pickedIds = new Set();
+let dateRange = null;
+
+// ── Stage 1: Find candidates ─────────────────────────────────────
+document.getElementById('find-candidates').addEventListener('click', async () => {
+  const btn = document.getElementById('find-candidates');
+  const status = document.getElementById('stage-1-status');
+  const sinceDate = document.getElementById('since-date').value;
+
+  btn.disabled = true;
+  status.textContent = 'Scanning EDGAR (this takes ~10-20 seconds)...';
+
+  // Reset stage 2/3
+  document.getElementById('candidates').innerHTML = '';
+  document.getElementById('draft-controls').hidden = true;
+  document.getElementById('output-area').hidden = true;
+  document.getElementById('output-divider').hidden = true;
+  pickedIds.clear();
+
+  try {
+    const t0 = Date.now();
+    const res = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_type: 'brief_candidates', date_after: sinceDate }),
+    });
+
+    if (!res.ok) throw new Error(`Lambda ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    candidatesData = data.candidates || [];
+    dateRange = data.date_range;
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    status.textContent = `Found ${candidatesData.length} candidates in ${elapsed}s. Range: ${data.date_range.since} through ${data.date_range.through}.`;
+
+    // Show bucket counts
+    const bcEl = document.getElementById('bucket-counts');
+    bcEl.hidden = false;
+    bcEl.innerHTML = Object.entries(data.bucket_counts || {})
+      .map(([k, v]) => `<span>${escapeHtml(k.replace('_', ' '))}: ${v}</span>`)
+      .join('');
+
+    renderCandidates();
+
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+    status.style.color = '#7A3520';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ── Stage 1.5: Render candidates as picker cards ─────────────────
+function renderCandidates() {
+  document.getElementById('picker-divider').hidden = false;
+  const container = document.getElementById('candidates');
+  container.innerHTML = '';
+
+  if (candidatesData.length === 0) {
+    container.innerHTML = '<div class="empty-state">No candidate signals found this week. Try a wider date range.</div>';
+    return;
+  }
+
+  candidatesData.forEach((c, idx) => {
+    const card = document.createElement('div');
+    card.className = 'candidate';
+    card.dataset.id = idx;
+
+    const samplesHtml = (c.sample_filings || []).slice(0, 3).map(s =>
+      `${escapeHtml(s.filer)} · ${escapeHtml(s.form)} · ${escapeHtml(s.date)}${s.amount ? ' · $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`
+    ).join('<br>');
+
+    card.innerHTML = `
+      <div class="candidate-bucket">${escapeHtml((c.bucket || '').replace('_', ' '))}</div>
+      <div class="candidate-headline">${escapeHtml(c.headline)}</div>
+      <div class="candidate-samples">${samplesHtml || ''}</div>
+    `;
+    card.addEventListener('click', () => togglePick(idx));
+    container.appendChild(card);
+  });
+
+  document.getElementById('draft-controls').hidden = false;
+  updatePickCount();
+}
+
+function togglePick(idx) {
+  const card = document.querySelector(`.candidate[data-id="${idx}"]`);
+  if (pickedIds.has(idx)) {
+    pickedIds.delete(idx);
+    card.classList.remove('picked');
+  } else {
+    if (pickedIds.size >= 3) {
+      // Already 3 picked — unpick the first one and add this
+      const firstId = pickedIds.values().next().value;
+      pickedIds.delete(firstId);
+      document.querySelector(`.candidate[data-id="${firstId}"]`)?.classList.remove('picked');
+    }
+    pickedIds.add(idx);
+    card.classList.add('picked');
+  }
+  updatePickCount();
+}
+
+function updatePickCount() {
+  const n = pickedIds.size;
+  document.getElementById('pick-count').textContent = `${n} of 3 picked`;
+  document.getElementById('generate-draft').disabled = n !== 3;
+}
+
+// ── Stage 2: Generate draft ──────────────────────────────────────
+document.getElementById('generate-draft').addEventListener('click', async () => {
+  await generateDraft();
+});
+
+async function generateDraft() {
+  const btn = document.getElementById('generate-draft');
+  const issueNum = parseInt(document.getElementById('issue-num').value, 10) || 1;
+  const picked = [...pickedIds].map(idx => candidatesData[idx]);
+
+  btn.disabled = true;
+  btn.textContent = 'Drafting...';
+  document.getElementById('output-divider').hidden = false;
+  document.getElementById('output-area').hidden = false;
+  document.getElementById('output-pre').textContent = 'Drafting (this takes 10-30 seconds — Gemini is generating)...';
+
+  try {
+    const res = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_type: 'brief_draft',
+        issue_number: issueNum,
+        candidates: picked,
+        date_range: dateRange,
+      }),
+    });
+
+    if (!res.ok) throw new Error(`Lambda ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    document.getElementById('output-pre').textContent = data.markdown || '(empty draft)';
+
+  } catch (err) {
+    document.getElementById('output-pre').textContent = `Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Draft these signals';
+  }
+}
+
+// ── Output toolbar ───────────────────────────────────────────────
+document.getElementById('copy-md').addEventListener('click', async () => {
+  const text = document.getElementById('output-pre').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('copy-md');
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = old, 1500);
+  } catch (err) {
+    alert('Copy failed: ' + err.message);
+  }
+});
+
+document.getElementById('reroll').addEventListener('click', async () => {
+  if (pickedIds.size !== 3) return;
+  await generateDraft();
+});
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+</script>
+
+</body>
+</html>
