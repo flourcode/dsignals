@@ -1539,6 +1539,34 @@ THE FORMAT FOR EACH SIGNAL (FIXED):
 
 ---
 
+CLUSTER SIGNALS (when input says "CLUSTER — N candidates grouped"):
+
+The format is the same skeleton but the headline names the CLUSTER, not a single company. The "What got filed" lists the companies. The "What it actually is" explains the cluster pattern, not any one filing. Example:
+
+### Signal #1 — Five tech proxies hit in 48 hours
+
+**What got filed**
+Alphabet, Palantir, Coinbase, Reddit, and Walmart all filed annual proxies (DEF 14A) between April 23 and April 24. Five filings in two days.
+
+**What it actually is**
+Proxy season cluster. These companies are locking in board priorities and executive compensation structures before mid-year earnings calls begin. The simultaneous filing window suggests legal teams coordinated to front-run the May proxy contest deadlines.
+
+**Why it matters**
+- Five major tech proxies in 48 hours is roughly 3x the historical weekly average for this window.
+- The cluster includes both founder-controlled companies (Alphabet, Palantir, Reddit) and traditional governance structures (Walmart, Coinbase) — meaning this isn't a sector trend, it's a calendar trend.
+- Each proxy will be reviewed by the same group of institutional investors who must vote within 30 days.
+
+**What to do**
+- If you sell into board members or general counsel offices: this is your two-week pitch window.
+- If you partner with proxy advisory firms: expect peak engagement now through mid-May.
+- If you track governance trends: cross-reference exec comp metrics across these five for the new compensation playbook.
+
+👉 [Open in dsignals](deep_link_here)
+
+The list of filings can be enumerated inline within the signal — don't list them as bullet points UNLESS it adds insight (like showing the date timing or the diversity of company types).
+
+---
+
 EXAMPLES OF GOOD VS. BAD PROSE:
 
 ❌ BAD "What it actually is" (generic textbook):
@@ -1589,25 +1617,59 @@ Then sign off:
 
 const handleBriefDraft = async (responseStream, body) => {
   try {
-    const { issue_number, candidates, date_range } = body || {};
-    if (!candidates || candidates.length === 0) {
-      writeJsonResponse(responseStream, 400, { error: 'No candidates provided' });
-      return;
+    const { issue_number, signal_blocks, candidates, date_range } = body || {};
+
+    // Backward compat: if signal_blocks not provided, treat each candidate as a single block
+    let blocks = signal_blocks;
+    if (!blocks || blocks.length === 0) {
+      if (!candidates || candidates.length === 0) {
+        writeJsonResponse(responseStream, 400, { error: 'No signal_blocks or candidates provided' });
+        return;
+      }
+      blocks = candidates.map(c => ({ kind: 'single', candidates: [c] }));
     }
 
-    const candidatesPayload = candidates.map((c, i) => {
-      const samples = (c.sample_filings || []).map(s =>
-        `  - ${s.filer} | ${s.form} | ${s.date}${s.amount ? ' | $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`
-      ).join('\n');
+    const blocksPayload = blocks.map((block, i) => {
+      const cands = block.candidates || [];
 
-      // Compute date span and unique filer count from samples
-      const dates = (c.sample_filings || []).map(s => s.date).filter(Boolean).sort();
-      const dateSpan = dates.length > 0
-        ? (dates.length === 1 ? dates[0] : `${dates[0]} through ${dates[dates.length - 1]}`)
-        : 'unknown';
-      const uniqueFilers = new Set((c.sample_filings || []).map(s => s.filer)).size;
+      if (block.kind === 'cluster' && cands.length > 1) {
+        // Composite signal: render as ONE cluster with multiple filings
+        const allSamples = cands.flatMap(c =>
+          (c.sample_filings || []).map(s => `  - ${s.filer} | ${s.form} | ${s.date}${s.amount ? ' | $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`)
+        );
+        const dates = cands.flatMap(c => (c.sample_filings || []).map(s => s.date)).filter(Boolean).sort();
+        const dateSpan = dates.length > 0
+          ? (dates.length === 1 ? dates[0] : `${dates[0]} through ${dates[dates.length - 1]}`)
+          : 'unknown';
+        const companies = [...new Set(cands.map(c => c.company))].join(', ');
+        const bucketType = cands[0]?.bucket || '?';
 
-      return `Signal ${i + 1} candidate:
+        return `Signal ${i + 1} (CLUSTER — ${cands.length} candidates grouped as one signal):
+  Bucket type: ${bucketType}
+  Companies in cluster: ${companies}
+  Cluster size: ${cands.length}
+  Date span: ${dateSpan}
+  All filings in cluster (use these exact names and dates):
+${allSamples.join('\n')}
+  Deep link for cluster: ${cands[0].deep_link}
+
+  IMPORTANT: This is ONE signal block, not ${cands.length}. Write a single headline like
+  "${cands.length} ${bucketType.replace('_', ' ')} filings hit in [N hours/days]". Inside the
+  signal block, use a list to enumerate the companies. The "Why it matters" should explain
+  the CLUSTER pattern, not any individual filing.`;
+      } else {
+        // Single signal
+        const c = cands[0];
+        const samples = (c.sample_filings || []).map(s =>
+          `  - ${s.filer} | ${s.form} | ${s.date}${s.amount ? ' | $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`
+        ).join('\n');
+        const dates = (c.sample_filings || []).map(s => s.date).filter(Boolean).sort();
+        const dateSpan = dates.length > 0
+          ? (dates.length === 1 ? dates[0] : `${dates[0]} through ${dates[dates.length - 1]}`)
+          : 'unknown';
+        const uniqueFilers = new Set((c.sample_filings || []).map(s => s.filer)).size;
+
+        return `Signal ${i + 1}:
   Bucket type: ${c.bucket}
   Headline hint: ${c.headline}
   Company / topic: ${c.company}
@@ -1618,20 +1680,22 @@ const handleBriefDraft = async (responseStream, body) => {
   Sample filings (use these exact names and dates, do not invent):
 ${samples}
   Deep link path: ${c.deep_link}`;
+      }
     }).join('\n\n');
 
     const userMessage = `Issue #${issue_number || 'X'}
 Date range covered: ${date_range?.since || 'last week'} through ${date_range?.through || 'today'}
+Number of signal blocks: ${blocks.length}
 
-Here are the 3 picked candidates. Draft the full newsletter in markdown.
+Here are the picked signal blocks. Draft the full newsletter in markdown.
 
-${candidatesPayload}
+${blocksPayload}
 
-Build the deep links as: https://dsignals.com${candidates[0].deep_link}, https://dsignals.com${candidates[1].deep_link}, https://dsignals.com${candidates[2].deep_link}
+Build deep links as: https://dsignals.com[deep_link_path]
 
-Now write the newsletter. Use SPECIFIC details (counts, dates, filer names) from the candidates above. Do not invent. Do not write generic filing-type definitions. Make each signal feel like an insight, not a definition.
+Now write the newsletter. Use SPECIFIC details (counts, dates, filer names) from the blocks above. Do not invent. Do not write generic filing-type definitions. Make each signal feel like an insight, not a definition.
 
-Start with the issue title (e.g. "Issue #${issue_number}: [theme]"), then 3 signal blocks, then "## The pattern this week", then sign-off.`;
+Start with the issue title (e.g. "Issue #${issue_number}: [theme]"), then ${blocks.length} signal blocks, then "## The pattern this week", then sign-off.`;
 
     // Call Gemini directly with the brief-specific prompt
     if (!GEMINI_API_KEY) {
