@@ -975,6 +975,474 @@ const handleAudit = async (responseStream, body) => {
 
 
 // ============================================================================
+// SECTION 10c: HANDLER — brief_candidates (newsletter signal gathering)
+// ============================================================================
+//
+// Runs 5 parallel research queries to surface candidate signals for the
+// weekly Substack brief. Returns a list of candidates the user picks 3 from.
+//
+// Body shape:
+//   { request_type: 'brief_candidates', date_after: '2026-04-19' }
+//
+// Response shape:
+//   {
+//     date_range: { since: '2026-04-19', through: '2026-04-26' },
+//     candidates: [
+//       { bucket, kind, headline, company, filing_count, sample_filings, raw_query }
+//     ]
+//   }
+// ============================================================================
+
+// Public AI-adjacent companies to monitor for 8-Ks and Form 4s
+const BRIEF_AI_PUBLIC_TICKERS = [
+  'microsoft', 'alphabet', 'meta', 'amazon', 'nvidia', 'amd',
+  'palantir', 'salesforce', 'oracle', 'ibm', 'snowflake',
+  'datadog', 'cloudflare', 'crowdstrike',
+];
+
+// Private AI / fintech / climate companies for SPV trail scanning
+const BRIEF_PRIVATE_COMPANIES = [
+  'anthropic', 'openai', 'databricks', 'mistral', 'stripe', 'plaid',
+  'klarna', 'canva', 'discord',
+];
+
+const handleBriefCandidates = async (responseStream, body) => {
+  try {
+    const { date_after } = body || {};
+
+    // Default: last 7 days
+    const today = new Date();
+    const sinceDefault = new Date(today.getTime() - 7 * 86400000);
+    const since = date_after || sinceDefault.toISOString().slice(0, 10);
+    const through = today.toISOString().slice(0, 10);
+
+    console.log('[brief_candidates]', JSON.stringify({ since, through }));
+
+    // Gather all 5 buckets in parallel — each returns a list of candidates
+    const [spvTrails, sectorRaises, public8ks, insiderActivity, aiDisclosures] = await Promise.all([
+      gatherSpvTrailCandidates(since),
+      gatherSectorRaiseCandidates(since),
+      gatherPublic8kCandidates(since),
+      gatherInsiderCandidates(since),
+      gatherAiDisclosureCandidates(since),
+    ]);
+
+    const candidates = [
+      ...spvTrails.map(c => ({ ...c, bucket: 'spv_trail' })),
+      ...sectorRaises.map(c => ({ ...c, bucket: 'sector_raise' })),
+      ...public8ks.map(c => ({ ...c, bucket: 'public_8k' })),
+      ...insiderActivity.map(c => ({ ...c, bucket: 'insider' })),
+      ...aiDisclosures.map(c => ({ ...c, bucket: 'ai_disclosure' })),
+    ];
+
+    writeJsonResponse(responseStream, 200, {
+      date_range: { since, through },
+      candidates,
+      bucket_counts: {
+        spv_trail: spvTrails.length,
+        sector_raise: sectorRaises.length,
+        public_8k: public8ks.length,
+        insider: insiderActivity.length,
+        ai_disclosure: aiDisclosures.length,
+      },
+    });
+  } catch (err) {
+    console.error('[brief_candidates] error', err.message);
+    writeJsonResponse(responseStream, 502, { error: err.message });
+  }
+};
+
+// ── Bucket 1: SPV trail activity ────────────────────────────────────────
+// Scan known-private companies for new SPV-like filings in the date window.
+// A company is a "candidate" if it had 3+ new SPV-like Form Ds this week.
+async function gatherSpvTrailCandidates(since) {
+  const candidates = [];
+
+  for (const companyKey of BRIEF_PRIVATE_COMPANIES) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[companyKey];
+      if (!companyInfo) continue;
+      const companyName = companyInfo.display;
+
+      // Re-use the existing private company fetcher logic — but with date filter
+      const params = new URLSearchParams();
+      params.set('q', `"${companyName}"`);
+      params.set('forms', 'D,D/A');
+      params.set('dateRange', 'custom');
+      params.set('startdt', since);
+
+      const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+      const data = await fetchEdgar(url);
+      const hits = data?.hits?.hits || [];
+      const rows = hits.map(h => parseFiling(h, companyName));
+
+      // Filter to SPV-like rows
+      const tokens = companyName.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+      const spvRows = rows.filter(r => {
+        const filerLower = (r.filer_name || '').toLowerCase();
+        return tokens.some(t => filerLower.includes(t));
+      });
+      // Apply date filter (EDGAR sometimes leaks)
+      const recent = spvRows.filter(r => r.filed_date && r.filed_date >= since);
+
+      if (recent.length >= 3) {
+        candidates.push({
+          kind: 'spv_trail',
+          headline: `${recent.length} new SPVs formed around ${companyName} this week`,
+          company: companyName,
+          company_key: companyKey,
+          filing_count: recent.length,
+          sample_filings: recent.slice(0, 3).map(r => ({
+            filer: r.filer_name,
+            form: r.form_type,
+            date: r.filed_date,
+            doc_link: r.doc_link,
+          })),
+          raw_query: `company="${companyName}" form_type="D" date_after="${since}"`,
+          deep_link: `?q=${encodeURIComponent(companyName + ' SPV activity')}`,
+        });
+      }
+    } catch (err) {
+      console.error('[brief_candidates] SPV scan error for', companyKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 2: Sector raises (operating companies) ─────────────────────
+// AI / fintech / climate sector Form Ds with a real amount, last 7d
+async function gatherSectorRaiseCandidates(since) {
+  const candidates = [];
+  const sectorsToCheck = ['ai', 'fintech', 'climate', 'cybersecurity', 'biotech'];
+
+  for (const sectorKey of sectorsToCheck) {
+    try {
+      const sectorDef = SECTORS[sectorKey];
+      if (!sectorDef) continue;
+
+      const distinctive = sectorDef.keywords.slice(0, 5);
+      const params = new URLSearchParams();
+      params.set('q', distinctive.map(k => `"${k}"`).join(' OR '));
+      params.set('forms', 'D');
+      params.set('dateRange', 'custom');
+      params.set('startdt', since);
+
+      // Single page fetch for candidate gathering — keeps it fast
+      const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+      const data = await fetchEdgar(url);
+      const hits = data?.hits?.hits || [];
+      let rows = hits.map(h => parseFiling(h, null));
+
+      // Date filter (EDGAR FTS is unreliable on dates)
+      rows = rows.filter(r => r.filed_date && r.filed_date >= since);
+
+      // Drop non-operating
+      rows = rows.filter(r => !isNonOperatingFiler(r.filer_name));
+
+      // Each operating-company filing is a potential signal
+      for (const row of rows.slice(0, 3)) {
+        candidates.push({
+          kind: 'sector_raise',
+          headline: row.amount
+            ? `${sectorDef.display} raise: ${row.filer_name} filed Form D for $${(row.amount/1_000_000).toFixed(1)}M`
+            : `${sectorDef.display} raise: ${row.filer_name} filed Form D (amount undisclosed)`,
+          company: row.filer_name,
+          sector: sectorDef.display,
+          filing_count: 1,
+          sample_filings: [{
+            filer: row.filer_name,
+            form: row.form_type,
+            date: row.filed_date,
+            amount: row.amount,
+            doc_link: row.doc_link,
+          }],
+          raw_query: `sector="${sectorKey}" form_type="D" date_after="${since}"`,
+          deep_link: `?q=${encodeURIComponent(sectorDef.display + ' raises since ' + since)}`,
+        });
+      }
+    } catch (err) {
+      console.error('[brief_candidates] sector scan error for', sectorKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 3: Public-company 8-Ks (material disclosure) ───────────────
+async function gatherPublic8kCandidates(since) {
+  const candidates = [];
+
+  for (const tickerKey of BRIEF_AI_PUBLIC_TICKERS) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[tickerKey];
+      if (!companyInfo || !companyInfo.cik) continue;
+
+      const result = await fetchPublicCompanyFilings({
+        known: companyInfo,
+        formType: '8-K',
+        dateAfter: since,
+        dateBefore: null,
+      });
+
+      const filings = result?.card?.rows || [];
+      if (filings.length === 0) continue;
+
+      // Take the most recent 8-K as a candidate
+      const latest = filings[0];
+      candidates.push({
+        kind: 'public_8k',
+        headline: `${companyInfo.display} filed 8-K on ${latest.filed_date}`,
+        company: companyInfo.display,
+        company_key: tickerKey,
+        filing_count: filings.length,
+        sample_filings: [{
+          filer: companyInfo.display,
+          form: latest.form_type,
+          date: latest.filed_date,
+          doc_link: latest.doc_link,
+        }],
+        raw_query: `company="${companyInfo.display}" form_type="8-K" date_after="${since}"`,
+        deep_link: `?q=${encodeURIComponent(companyInfo.display + ' recent 8-K')}`,
+      });
+    } catch (err) {
+      console.error('[brief_candidates] 8-K scan error for', tickerKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 4: Insider activity (Form 4) at AI-adjacent public companies ──
+async function gatherInsiderCandidates(since) {
+  const candidates = [];
+
+  for (const tickerKey of BRIEF_AI_PUBLIC_TICKERS) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[tickerKey];
+      if (!companyInfo || !companyInfo.cik) continue;
+
+      const result = await fetchPublicCompanyFilings({
+        known: companyInfo,
+        formType: '4',
+        dateAfter: since,
+        dateBefore: null,
+      });
+
+      const filings = result?.card?.rows || [];
+      // Only flag if there are 3+ Form 4s this week (clusters matter)
+      if (filings.length < 3) continue;
+
+      candidates.push({
+        kind: 'insider',
+        headline: `${filings.length} insider transactions at ${companyInfo.display} this week`,
+        company: companyInfo.display,
+        company_key: tickerKey,
+        filing_count: filings.length,
+        sample_filings: filings.slice(0, 3).map(r => ({
+          filer: r.filer_name,
+          form: r.form_type,
+          date: r.filed_date,
+          doc_link: r.doc_link,
+        })),
+        raw_query: `company="${companyInfo.display}" form_type="4" date_after="${since}"`,
+        deep_link: `?q=${encodeURIComponent(companyInfo.display + ' insider activity')}`,
+      });
+    } catch (err) {
+      console.error('[brief_candidates] insider scan error for', tickerKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 5: 10-K/10-Q with AI disclosure language ───────────────────
+async function gatherAiDisclosureCandidates(since) {
+  const candidates = [];
+
+  try {
+    const params = new URLSearchParams();
+    params.set('q', '"artificial intelligence" OR "machine learning" OR "generative AI"');
+    params.set('forms', '10-K,10-Q');
+    params.set('dateRange', 'custom');
+    params.set('startdt', since);
+
+    const url = `${SEC_BASE}/LATEST/search-index?${params.toString()}&hits=100`;
+    const data = await fetchEdgar(url);
+    const hits = data?.hits?.hits || [];
+    let rows = hits.map(h => parseFiling(h, null));
+
+    rows = rows.filter(r => r.filed_date && r.filed_date >= since);
+    rows = rows.filter(r => !isNonOperatingFiler(r.filer_name));
+
+    for (const row of rows.slice(0, 5)) {
+      candidates.push({
+        kind: 'ai_disclosure',
+        headline: `${row.filer_name} ${row.form_type} mentions AI`,
+        company: row.filer_name,
+        filing_count: 1,
+        sample_filings: [{
+          filer: row.filer_name,
+          form: row.form_type,
+          date: row.filed_date,
+          doc_link: row.doc_link,
+        }],
+        raw_query: `form_type="${row.form_type}" date_after="${since}" — AI language`,
+        deep_link: `?q=${encodeURIComponent(row.filer_name + ' ' + row.form_type)}`,
+      });
+    }
+  } catch (err) {
+    console.error('[brief_candidates] AI disclosure scan error', err.message);
+  }
+
+  return candidates;
+}
+
+
+// ============================================================================
+// SECTION 10d: HANDLER — brief_draft (generate newsletter markdown)
+// ============================================================================
+//
+// Takes 3 picked candidates and asks Gemini to draft each in the dsignals
+// newsletter format. Returns a single markdown blob ready to paste into
+// Substack.
+//
+// Body shape:
+//   { request_type: 'brief_draft',
+//     issue_number: 7,
+//     candidates: [...3 candidate objects from brief_candidates],
+//     date_range: { since, through } }
+// ============================================================================
+
+const BRIEF_SYSTEM_PROMPT = `You are drafting a weekly Substack newsletter for dsignals — a real-time SEC filings intelligence product.
+
+Your voice:
+- Declarative and tight. Short paragraphs (2-3 lines max).
+- Salesperson-aware. Three audiences: sales reps selling into companies, partners looking for entry points, competitors tracking activity.
+- No hedging language. "This is X" not "This could potentially indicate X."
+- No buzzwords. No "leverage," "synergy," "ecosystem play."
+- Every signal MUST end with a "👉 Open in dsignals" deep link.
+
+The format for EACH signal block is FIXED:
+
+### Signal #N — [headline]
+
+**What got filed**
+[1-2 sentences on the actual filing — filer, form type, date, key fact like amount or filer family]
+
+**What it actually is**
+[Translation from filing-jargon to investor/operator language. SPV = secondary demand. Form D + early-stage = bridge or growth capital. 8-K with strategic language = budget shift or material disclosure. Use SEC-general knowledge about what filing TYPES mean — never make up content from inside the filing.]
+
+**Why it matters**
+[Bullet list of 3-4 short bullets. What this signals about the market, the sector, or the company's position.]
+
+**What to do**
+- If you sell into [sector/company]: [specific action]
+- If you partner in this space: [specific action]
+- If you track competitors: [specific action]
+
+👉 [Open in dsignals](DEEP_LINK_HERE)
+
+---
+
+CRITICAL RULES:
+- NEVER invent numbers, dates, filer names, or filing contents not in the candidate data provided
+- NEVER claim to have read a filing's actual content
+- NEVER use em dashes inside sentences (use regular dashes or commas)
+- "What it actually is" should use SEC-general knowledge ("Form Ds with no offering amount typically reflect bridge rounds or undisclosed sizes") — that's allowed
+- "Why it matters" should connect the filing TYPE pattern to market dynamics — also allowed
+- "What to do" should be tactical and specific to the audience type
+
+After all 3 signals, write a final section:
+
+## The pattern this week
+
+[2-3 sentences identifying what the 3 signals together suggest about the market right now. Brief and sharp. End with "These signals show up in filings before they show up anywhere else." or similar punchline.]
+
+Then a sign-off:
+
+---
+
+— Mark`;
+
+const handleBriefDraft = async (responseStream, body) => {
+  try {
+    const { issue_number, candidates, date_range } = body || {};
+    if (!candidates || candidates.length === 0) {
+      writeJsonResponse(responseStream, 400, { error: 'No candidates provided' });
+      return;
+    }
+
+    const candidatesPayload = candidates.map((c, i) => {
+      const samples = (c.sample_filings || []).map(s =>
+        `  - ${s.filer} | ${s.form} | ${s.date}${s.amount ? ' | $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`
+      ).join('\n');
+      return `Signal ${i + 1} candidate:
+  Headline hint: ${c.headline}
+  Bucket: ${c.bucket}
+  Company: ${c.company}
+  Filing count: ${c.filing_count}
+  Sample filings:
+${samples}
+  Deep link path: ${c.deep_link}`;
+    }).join('\n\n');
+
+    const userMessage = `Issue #${issue_number || 'X'}
+Date range: ${date_range?.since || 'last week'} through ${date_range?.through || 'today'}
+
+Here are the 3 picked candidates. Draft the full newsletter in markdown using the format above.
+
+${candidatesPayload}
+
+Build the deep links as: https://dsignals.com${candidates[0].deep_link}, https://dsignals.com${candidates[1].deep_link}, etc.
+
+Now write the newsletter. Start with the issue title, then 3 signal blocks, then "The pattern this week", then sign-off.`;
+
+    // Call Gemini directly with the brief-specific prompt
+    if (!GEMINI_API_KEY) {
+      writeJsonResponse(responseStream, 500, { error: 'GEMINI_API_KEY not set' });
+      return;
+    }
+
+    const geminiBody = {
+      systemInstruction: { role: 'system', parts: [{ text: BRIEF_SYSTEM_PROMPT }] },
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 4096,
+      },
+    };
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+    const res = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(geminiBody),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Gemini error ${res.status}: ${errText.slice(0, 200)}`);
+    }
+
+    const data = await res.json();
+    const markdown = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    writeJsonResponse(responseStream, 200, {
+      issue_number: issue_number || null,
+      date_range,
+      markdown,
+    });
+
+  } catch (err) {
+    console.error('[brief_draft] error', err.message);
+    writeJsonResponse(responseStream, 502, { error: err.message });
+  }
+};
+
+
+// ============================================================================
 // SECTION 11: SKILL DATA FETCHER — SEC EDGAR
 // ============================================================================
 //
@@ -1981,6 +2449,16 @@ export const handler = awslambda.streamifyResponse(async (event, responseStream)
 
       case 'audit':
         await handleAudit(responseStream, body);
+        logReq('ok');
+        return;
+
+      case 'brief_candidates':
+        await handleBriefCandidates(responseStream, body);
+        logReq('ok');
+        return;
+
+      case 'brief_draft':
+        await handleBriefDraft(responseStream, body);
         logReq('ok');
         return;
 

@@ -232,4 +232,18 @@
   // Initial render
   renderGreeting();
 
+  // ──────────────────────────────────────────────────────────────────────
+  // URL query routing — if ?q=... is present in the URL, auto-fire that
+  // query as if the user had typed it. Used by Substack newsletter deep
+  // links: dsignals.com/?q=Anthropic+SPV+activity
+  // ──────────────────────────────────────────────────────────────────────
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialQuery = urlParams.get('q');
+  if (initialQuery && initialQuery.trim()) {
+    // Tiny delay so the greeting renders first, then we transition into the query
+    setTimeout(() => {
+      window.MoApp.submitMessage(initialQuery.trim());
+    }, 200);
+  }
+
 })();
