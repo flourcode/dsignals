@@ -993,11 +993,25 @@ const handleAudit = async (responseStream, body) => {
 //   }
 // ============================================================================
 
-// Public AI-adjacent companies to monitor for 8-Ks and Form 4s
+// Public AI-adjacent companies to monitor for insider activity (Form 4)
 const BRIEF_AI_PUBLIC_TICKERS = [
   'microsoft', 'alphabet', 'meta', 'amazon', 'nvidia', 'amd',
   'palantir', 'salesforce', 'oracle', 'ibm', 'snowflake',
   'datadog', 'cloudflare', 'crowdstrike',
+];
+
+// Wider public-company watchlist for annual reports (10-K), proxies (DEF 14A),
+// and earnings (8-K Item 2.02). Includes the AI list plus financial,
+// consumer, and other notable public companies whose filings interest
+// dsignals readers.
+const BRIEF_PUBLIC_WATCHLIST = [
+  // AI / cloud / SaaS
+  'microsoft', 'alphabet', 'meta', 'amazon', 'nvidia', 'amd',
+  'palantir', 'salesforce', 'oracle', 'ibm', 'snowflake',
+  'datadog', 'cloudflare', 'crowdstrike',
+  // Public consumer / fintech / other
+  'apple', 'tesla', 'netflix', 'rivian', 'coinbase', 'reddit', 'roblox',
+  'intel', 'jpmorgan', 'walmart', 'berkshire',
 ];
 
 // Private AI / fintech / climate companies for SPV trail scanning
@@ -1018,11 +1032,31 @@ const handleBriefCandidates = async (responseStream, body) => {
 
     console.log('[brief_candidates]', JSON.stringify({ since, through }));
 
-    // Gather all 5 buckets in parallel — each returns a list of candidates
-    const [spvTrails, sectorRaises, public8ks, insiderActivity, aiDisclosures] = await Promise.all([
+    // Gather all candidate buckets in parallel:
+    //   1. SPV trails (private companies)
+    //   2. Sector raises (operating-company Form Ds)
+    //   3. New 10-Ks this week (annual reports)
+    //   4. New 10-Qs this week (quarterly reports — sellers' scorecards)
+    //   5. New DEF 14A proxies (annual letters to shareholders)
+    //   6. Earnings (8-K Item 2.02)
+    //   7. Insider clusters (Form 4)
+    //   8. AI disclosure language (10-K/10-Q full text)
+    const [
+      spvTrails,
+      sectorRaises,
+      annualReports,
+      quarterlyReports,
+      proxies,
+      earnings,
+      insiderActivity,
+      aiDisclosures,
+    ] = await Promise.all([
       gatherSpvTrailCandidates(since),
       gatherSectorRaiseCandidates(since),
-      gatherPublic8kCandidates(since),
+      gatherAnnualReportCandidates(since),
+      gatherQuarterlyReportCandidates(since),
+      gatherProxyCandidates(since),
+      gatherEarningsCandidates(since),
       gatherInsiderCandidates(since),
       gatherAiDisclosureCandidates(since),
     ]);
@@ -1030,7 +1064,10 @@ const handleBriefCandidates = async (responseStream, body) => {
     const candidates = [
       ...spvTrails.map(c => ({ ...c, bucket: 'spv_trail' })),
       ...sectorRaises.map(c => ({ ...c, bucket: 'sector_raise' })),
-      ...public8ks.map(c => ({ ...c, bucket: 'public_8k' })),
+      ...annualReports.map(c => ({ ...c, bucket: 'annual_report' })),
+      ...quarterlyReports.map(c => ({ ...c, bucket: 'quarterly_report' })),
+      ...proxies.map(c => ({ ...c, bucket: 'proxy_letter' })),
+      ...earnings.map(c => ({ ...c, bucket: 'earnings' })),
       ...insiderActivity.map(c => ({ ...c, bucket: 'insider' })),
       ...aiDisclosures.map(c => ({ ...c, bucket: 'ai_disclosure' })),
     ];
@@ -1041,7 +1078,10 @@ const handleBriefCandidates = async (responseStream, body) => {
       bucket_counts: {
         spv_trail: spvTrails.length,
         sector_raise: sectorRaises.length,
-        public_8k: public8ks.length,
+        annual_report: annualReports.length,
+        quarterly_report: quarterlyReports.length,
+        proxy_letter: proxies.length,
+        earnings: earnings.length,
         insider: insiderActivity.length,
         ai_disclosure: aiDisclosures.length,
       },
@@ -1085,14 +1125,14 @@ async function gatherSpvTrailCandidates(since) {
       // Apply date filter (EDGAR sometimes leaks)
       const recent = spvRows.filter(r => r.filed_date && r.filed_date >= since);
 
-      if (recent.length >= 3) {
+      if (recent.length >= 5) {
         candidates.push({
           kind: 'spv_trail',
           headline: `${recent.length} new SPVs formed around ${companyName} this week`,
           company: companyName,
           company_key: companyKey,
           filing_count: recent.length,
-          sample_filings: recent.slice(0, 3).map(r => ({
+          sample_filings: recent.slice(0, 6).map(r => ({
             filer: r.filer_name,
             form: r.form_type,
             date: r.filed_date,
@@ -1169,11 +1209,157 @@ async function gatherSectorRaiseCandidates(since) {
   return candidates;
 }
 
-// ── Bucket 3: Public-company 8-Ks (material disclosure) ───────────────
-async function gatherPublic8kCandidates(since) {
+// ── Bucket 3: New 10-Ks this week (annual reports) ────────────────────
+// Substack readers love new annual reports. Each 10-K is a meaty document
+// with an MD&A, risk factors, and financial deep-dive. The signal is
+// "here's who just dropped their annual."
+async function gatherAnnualReportCandidates(since) {
   const candidates = [];
 
-  for (const tickerKey of BRIEF_AI_PUBLIC_TICKERS) {
+  for (const tickerKey of BRIEF_PUBLIC_WATCHLIST) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[tickerKey];
+      if (!companyInfo || !companyInfo.cik) continue;
+
+      const result = await fetchPublicCompanyFilings({
+        known: companyInfo,
+        formType: '10-K',
+        dateAfter: since,
+        dateBefore: null,
+      });
+
+      const filings = result?.card?.rows || [];
+      if (filings.length === 0) continue;
+
+      // 10-Ks are filed once a year — any 10-K this week is a signal
+      const latest = filings[0];
+      candidates.push({
+        kind: 'annual_report',
+        headline: `${companyInfo.display} filed 10-K on ${latest.filed_date}`,
+        company: companyInfo.display,
+        company_key: tickerKey,
+        filing_count: filings.length,
+        sample_filings: [{
+          filer: companyInfo.display,
+          form: latest.form_type,
+          date: latest.filed_date,
+          doc_link: latest.doc_link,
+        }],
+        raw_query: `company="${companyInfo.display}" form_type="10-K" date_after="${since}"`,
+        deep_link: `?q=${encodeURIComponent(companyInfo.display + ' 10-K')}`,
+      });
+    } catch (err) {
+      console.error('[brief_candidates] 10-K scan error for', tickerKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 4: New 10-Qs this week (quarterly reports — sellers' scorecards) ──
+// 10-Qs are the quarterly version of the 10-K. For B2B sellers with quarterly
+// targets, a fresh 10-Q from a target account is the most actionable document
+// of the quarter — segment revenue, capex direction, guidance commentary.
+// Unlike 8-Ks, 10-Qs hit on a known cadence (3 per year per company) so they
+// aren't routine noise — they're scheduled scorecards.
+async function gatherQuarterlyReportCandidates(since) {
+  const candidates = [];
+
+  for (const tickerKey of BRIEF_PUBLIC_WATCHLIST) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[tickerKey];
+      if (!companyInfo || !companyInfo.cik) continue;
+
+      const result = await fetchPublicCompanyFilings({
+        known: companyInfo,
+        formType: '10-Q',
+        dateAfter: since,
+        dateBefore: null,
+      });
+
+      const filings = result?.card?.rows || [];
+      if (filings.length === 0) continue;
+
+      const latest = filings[0];
+      candidates.push({
+        kind: 'quarterly_report',
+        headline: `${companyInfo.display} filed 10-Q on ${latest.filed_date}`,
+        company: companyInfo.display,
+        company_key: tickerKey,
+        filing_count: filings.length,
+        sample_filings: [{
+          filer: companyInfo.display,
+          form: latest.form_type,
+          date: latest.filed_date,
+          doc_link: latest.doc_link,
+        }],
+        raw_query: `company="${companyInfo.display}" form_type="10-Q" date_after="${since}"`,
+        deep_link: `?q=${encodeURIComponent(companyInfo.display + ' 10-Q')}`,
+      });
+    } catch (err) {
+      console.error('[brief_candidates] 10-Q scan error for', tickerKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 5: Annual proxies (DEF 14A) — letters to shareholders ──────
+// The annual proxy contains the letter to shareholders, which is often the
+// most readable strategic document a public company files. Buffett's letter,
+// Bezos-style letters, exec comp tables. High signal when they land.
+async function gatherProxyCandidates(since) {
+  const candidates = [];
+
+  for (const tickerKey of BRIEF_PUBLIC_WATCHLIST) {
+    try {
+      const companyInfo = KNOWN_COMPANIES[tickerKey];
+      if (!companyInfo || !companyInfo.cik) continue;
+
+      const result = await fetchPublicCompanyFilings({
+        known: companyInfo,
+        formType: 'DEF 14A',
+        dateAfter: since,
+        dateBefore: null,
+      });
+
+      const filings = result?.card?.rows || [];
+      if (filings.length === 0) continue;
+
+      const latest = filings[0];
+      candidates.push({
+        kind: 'proxy_letter',
+        headline: `${companyInfo.display} filed annual proxy (DEF 14A) on ${latest.filed_date}`,
+        company: companyInfo.display,
+        company_key: tickerKey,
+        filing_count: filings.length,
+        sample_filings: [{
+          filer: companyInfo.display,
+          form: latest.form_type,
+          date: latest.filed_date,
+          doc_link: latest.doc_link,
+        }],
+        raw_query: `company="${companyInfo.display}" form_type="DEF 14A" date_after="${since}"`,
+        deep_link: `?q=${encodeURIComponent(companyInfo.display + ' annual proxy')}`,
+      });
+    } catch (err) {
+      console.error('[brief_candidates] proxy scan error for', tickerKey, err.message);
+    }
+  }
+
+  return candidates;
+}
+
+// ── Bucket 6: Earnings (8-K with Item 2.02) ────────────────────────────
+// When a company reports earnings, they file an 8-K with Item 2.02
+// (Results of Operations) attaching the press release and call materials.
+// The submissions API doesn't filter by item code, so we pull all 8-Ks for
+// the company in the date range. If there's a fresh 8-K right at earnings
+// season timing, it's almost certainly the earnings report.
+async function gatherEarningsCandidates(since) {
+  const candidates = [];
+
+  for (const tickerKey of BRIEF_PUBLIC_WATCHLIST) {
     try {
       const companyInfo = KNOWN_COMPANIES[tickerKey];
       if (!companyInfo || !companyInfo.cik) continue;
@@ -1188,32 +1374,39 @@ async function gatherPublic8kCandidates(since) {
       const filings = result?.card?.rows || [];
       if (filings.length === 0) continue;
 
-      // Take the most recent 8-K as a candidate
+      // For earnings season, what matters most is "this company filed AN 8-K
+      // this week" — let the user click through to confirm it's earnings.
+      // We still need to be careful not to flood the brief with routine 8-Ks,
+      // so we only flag if the company has 1-3 8-Ks this week (more than 3
+      // suggests something else is happening, like governance churn — covered
+      // by other buckets).
+      if (filings.length > 3) continue;
+
       const latest = filings[0];
       candidates.push({
-        kind: 'public_8k',
-        headline: `${companyInfo.display} filed 8-K on ${latest.filed_date}`,
+        kind: 'earnings',
+        headline: `${companyInfo.display} filed 8-K on ${latest.filed_date} (likely earnings)`,
         company: companyInfo.display,
         company_key: tickerKey,
         filing_count: filings.length,
-        sample_filings: [{
+        sample_filings: filings.slice(0, 3).map(r => ({
           filer: companyInfo.display,
-          form: latest.form_type,
-          date: latest.filed_date,
-          doc_link: latest.doc_link,
-        }],
+          form: r.form_type,
+          date: r.filed_date,
+          doc_link: r.doc_link,
+        })),
         raw_query: `company="${companyInfo.display}" form_type="8-K" date_after="${since}"`,
         deep_link: `?q=${encodeURIComponent(companyInfo.display + ' recent 8-K')}`,
       });
     } catch (err) {
-      console.error('[brief_candidates] 8-K scan error for', tickerKey, err.message);
+      console.error('[brief_candidates] earnings scan error for', tickerKey, err.message);
     }
   }
 
   return candidates;
 }
 
-// ── Bucket 4: Insider activity (Form 4) at AI-adjacent public companies ──
+// ── Bucket 7: Insider activity (Form 4) at AI-adjacent public companies ──
 async function gatherInsiderCandidates(since) {
   const candidates = [];
 
@@ -1230,8 +1423,8 @@ async function gatherInsiderCandidates(since) {
       });
 
       const filings = result?.card?.rows || [];
-      // Only flag if there are 3+ Form 4s this week (clusters matter)
-      if (filings.length < 3) continue;
+      // Only flag if there are 5+ Form 4s this week (real clusters, not routine activity)
+      if (filings.length < 5) continue;
 
       candidates.push({
         kind: 'insider',
@@ -1239,7 +1432,7 @@ async function gatherInsiderCandidates(since) {
         company: companyInfo.display,
         company_key: tickerKey,
         filing_count: filings.length,
-        sample_filings: filings.slice(0, 3).map(r => ({
+        sample_filings: filings.slice(0, 6).map(r => ({
           filer: r.filer_name,
           form: r.form_type,
           date: r.filed_date,
@@ -1256,7 +1449,7 @@ async function gatherInsiderCandidates(since) {
   return candidates;
 }
 
-// ── Bucket 5: 10-K/10-Q with AI disclosure language ───────────────────
+// ── Bucket 8: 10-K/10-Q with AI disclosure language ───────────────────
 async function gatherAiDisclosureCandidates(since) {
   const candidates = [];
 
@@ -1316,50 +1509,79 @@ async function gatherAiDisclosureCandidates(since) {
 
 const BRIEF_SYSTEM_PROMPT = `You are drafting a weekly Substack newsletter for dsignals — a real-time SEC filings intelligence product.
 
-Your voice:
-- Declarative and tight. Short paragraphs (2-3 lines max).
-- Salesperson-aware. Three audiences: sales reps selling into companies, partners looking for entry points, competitors tracking activity.
-- No hedging language. "This is X" not "This could potentially indicate X."
-- No buzzwords. No "leverage," "synergy," "ecosystem play."
-- Every signal MUST end with a "👉 Open in dsignals" deep link.
+Your readers are sales reps, partners, investors, and competitors at AI/fintech/SaaS companies. They paid $10/month because they want NON-OBVIOUS insights from SEC data, not textbook definitions of filing types. If your draft sounds like a finance textbook, you have failed.
 
-The format for EACH signal block is FIXED:
+VOICE:
+- Declarative and tight. Short paragraphs.
+- No hedging. "This is X" not "This could potentially indicate X."
+- No buzzwords. No "synergy", "leverage", "ecosystem play".
+- Concrete and specific. Use the company name, the actual count, the actual date.
 
-### Signal #N — [headline]
+THE FORMAT FOR EACH SIGNAL (FIXED):
+
+### Signal #N — [Specific headline naming company + action + key number]
 
 **What got filed**
-[1-2 sentences on the actual filing — filer, form type, date, key fact like amount or filer family]
+[2 sentences. The specific filing, who filed it, when, and the most important number. Use the data exactly. Don't invent.]
 
 **What it actually is**
-[Translation from filing-jargon to investor/operator language. SPV = secondary demand. Form D + early-stage = bridge or growth capital. 8-K with strategic language = budget shift or material disclosure. Use SEC-general knowledge about what filing TYPES mean — never make up content from inside the filing.]
+[2-3 sentences. Connect the filing TYPE pattern to what's likely happening at THIS company. Reference the count, the cluster, the timing. Don't define the form type — translate the situation.]
 
 **Why it matters**
-[Bullet list of 3-4 short bullets. What this signals about the market, the sector, or the company's position.]
+[3-4 short bullets. Each bullet must be SPECIFIC to this filing's pattern. No generic "signals corporate activity" language.]
 
 **What to do**
-- If you sell into [sector/company]: [specific action]
-- If you partner in this space: [specific action]
-- If you track competitors: [specific action]
+- If you sell into [company]: [tactical action that uses the timing of this filing]
+- If you partner in this space: [tactical action]
+- If you track competitors: [tactical action]
 
 👉 [Open in dsignals](DEEP_LINK_HERE)
 
 ---
 
-CRITICAL RULES:
-- NEVER invent numbers, dates, filer names, or filing contents not in the candidate data provided
-- NEVER claim to have read a filing's actual content
-- NEVER use em dashes inside sentences (use regular dashes or commas)
-- "What it actually is" should use SEC-general knowledge ("Form Ds with no offering amount typically reflect bridge rounds or undisclosed sizes") — that's allowed
-- "Why it matters" should connect the filing TYPE pattern to market dynamics — also allowed
-- "What to do" should be tactical and specific to the audience type
+EXAMPLES OF GOOD VS. BAD PROSE:
 
-After all 3 signals, write a final section:
+❌ BAD "What it actually is" (generic textbook):
+"An 8-K disclosure is the primary mechanism for announcing material changes in operations, leadership, or financial outlook."
+
+✅ GOOD "What it actually is" (specific to the situation):
+"Datadog rarely files 8-Ks mid-quarter. Three weeks before earnings is the timing window for either a guidance preannouncement or a material acquisition disclosure. Either way, something is moving."
+
+❌ BAD "Why it matters" (generic):
+- Indicates a shift in operational strategy
+- Alerts stakeholders to immediate changes
+- Often precedes a broader public announcement
+
+✅ GOOD "Why it matters" (specific):
+- Datadog hasn't filed an unscheduled 8-K since the December acquisition
+- Mid-quarter timing rules out routine compliance items
+- April 22 is exactly three weeks before their typical Q1 earnings release
+
+❌ BAD "What to do" (filler):
+"Review the filing for mentions of new product lines."
+
+✅ GOOD "What to do" (tactical):
+"If you sell observability into Datadog accounts: hold your renewal pitches for 10 days until the news drops. If you compete with Datadog: assume they're either preannouncing weak Q1 or buying a feature gap. Watch their job postings for the gap."
+
+KEY RULES:
+- For SPV trail signals: always reference the specific dominant filer family from the data and the count. Never just say "an SPV was filed."
+- For insider clusters: count matters more than dates. "5 Form 4s in 4 days from 3 different officers" is the headline.
+- For sector raises: use the dollar amount IF it's known. If undisclosed, say "amount undisclosed" — that itself is a signal (suggests bridge or recap).
+- Never use em dashes (—) inside sentences. Commas, periods, or dashes only.
+- Never claim to have READ filing contents. You can describe what filings of THIS TYPE typically signal in THIS COMPANY's situation, but don't fabricate language from inside the filing.
+
+AFTER ALL 3 SIGNALS, write:
 
 ## The pattern this week
 
-[2-3 sentences identifying what the 3 signals together suggest about the market right now. Brief and sharp. End with "These signals show up in filings before they show up anywhere else." or similar punchline.]
+[3-4 sentences. Find the SPECIFIC thread connecting the three signals. Not "things are happening in tech" — what is actually moving? Examples: "Three of the four largest AI SPV operators filed this week. The cluster suggests secondary pricing has firmed up." Or: "Two cybersecurity Form D raises and one cyber 10-K with material disclosure language. Cyber budgets are flowing while everyone else cuts."]
 
-Then a sign-off:
+End with one of these closers (not all):
+- "These signals show up in filings before they show up anywhere else."
+- "The market hasn't priced this in yet."
+- "Watch this space."
+
+Then sign off:
 
 ---
 
@@ -1377,26 +1599,39 @@ const handleBriefDraft = async (responseStream, body) => {
       const samples = (c.sample_filings || []).map(s =>
         `  - ${s.filer} | ${s.form} | ${s.date}${s.amount ? ' | $' + (s.amount/1_000_000).toFixed(1) + 'M' : ''}`
       ).join('\n');
+
+      // Compute date span and unique filer count from samples
+      const dates = (c.sample_filings || []).map(s => s.date).filter(Boolean).sort();
+      const dateSpan = dates.length > 0
+        ? (dates.length === 1 ? dates[0] : `${dates[0]} through ${dates[dates.length - 1]}`)
+        : 'unknown';
+      const uniqueFilers = new Set((c.sample_filings || []).map(s => s.filer)).size;
+
       return `Signal ${i + 1} candidate:
+  Bucket type: ${c.bucket}
   Headline hint: ${c.headline}
-  Bucket: ${c.bucket}
-  Company: ${c.company}
-  Filing count: ${c.filing_count}
-  Sample filings:
+  Company / topic: ${c.company}
+  Total filing count this week: ${c.filing_count}
+  Date span of filings: ${dateSpan}
+  Unique filer entities: ${uniqueFilers}
+  ${c.sector ? 'Sector: ' + c.sector : ''}
+  Sample filings (use these exact names and dates, do not invent):
 ${samples}
   Deep link path: ${c.deep_link}`;
     }).join('\n\n');
 
     const userMessage = `Issue #${issue_number || 'X'}
-Date range: ${date_range?.since || 'last week'} through ${date_range?.through || 'today'}
+Date range covered: ${date_range?.since || 'last week'} through ${date_range?.through || 'today'}
 
-Here are the 3 picked candidates. Draft the full newsletter in markdown using the format above.
+Here are the 3 picked candidates. Draft the full newsletter in markdown.
 
 ${candidatesPayload}
 
-Build the deep links as: https://dsignals.com${candidates[0].deep_link}, https://dsignals.com${candidates[1].deep_link}, etc.
+Build the deep links as: https://dsignals.com${candidates[0].deep_link}, https://dsignals.com${candidates[1].deep_link}, https://dsignals.com${candidates[2].deep_link}
 
-Now write the newsletter. Start with the issue title, then 3 signal blocks, then "The pattern this week", then sign-off.`;
+Now write the newsletter. Use SPECIFIC details (counts, dates, filer names) from the candidates above. Do not invent. Do not write generic filing-type definitions. Make each signal feel like an insight, not a definition.
+
+Start with the issue title (e.g. "Issue #${issue_number}: [theme]"), then 3 signal blocks, then "## The pattern this week", then sign-off.`;
 
     // Call Gemini directly with the brief-specific prompt
     if (!GEMINI_API_KEY) {
