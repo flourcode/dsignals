@@ -1072,6 +1072,15 @@ const handleBriefCandidates = async (responseStream, body) => {
       ...aiDisclosures.map(c => ({ ...c, bucket: 'ai_disclosure' })),
     ];
 
+    // Sort by strength (strong first), then by bucket name (groups same buckets together)
+    const strengthOrder = { strong: 0, medium: 1, weak: 2 };
+    candidates.sort((a, b) => {
+      const sA = strengthOrder[a.strength] ?? 1;
+      const sB = strengthOrder[b.strength] ?? 1;
+      if (sA !== sB) return sA - sB;
+      return (a.bucket || '').localeCompare(b.bucket || '');
+    });
+
     writeJsonResponse(responseStream, 200, {
       date_range: { since, through },
       candidates,
@@ -1128,6 +1137,7 @@ async function gatherSpvTrailCandidates(since) {
       if (recent.length >= 5) {
         candidates.push({
           kind: 'spv_trail',
+          strength: recent.length >= 8 ? 'strong' : 'medium',
           headline: `${recent.length} new SPVs formed around ${companyName} this week`,
           company: companyName,
           company_key: companyKey,
@@ -1184,6 +1194,7 @@ async function gatherSectorRaiseCandidates(since) {
       for (const row of rows.slice(0, 3)) {
         candidates.push({
           kind: 'sector_raise',
+          strength: (row.amount && row.amount >= 10000000) ? 'strong' : 'medium',
           headline: row.amount
             ? `${sectorDef.display} raise: ${row.filer_name} filed Form D for $${(row.amount/1_000_000).toFixed(1)}M`
             : `${sectorDef.display} raise: ${row.filer_name} filed Form D (amount undisclosed)`,
@@ -1235,6 +1246,7 @@ async function gatherAnnualReportCandidates(since) {
       const latest = filings[0];
       candidates.push({
         kind: 'annual_report',
+        strength: 'strong',
         headline: `${companyInfo.display} filed 10-K on ${latest.filed_date}`,
         company: companyInfo.display,
         company_key: tickerKey,
@@ -1283,6 +1295,7 @@ async function gatherQuarterlyReportCandidates(since) {
       const latest = filings[0];
       candidates.push({
         kind: 'quarterly_report',
+        strength: 'medium',
         headline: `${companyInfo.display} filed 10-Q on ${latest.filed_date}`,
         company: companyInfo.display,
         company_key: tickerKey,
@@ -1329,6 +1342,7 @@ async function gatherProxyCandidates(since) {
       const latest = filings[0];
       candidates.push({
         kind: 'proxy_letter',
+        strength: 'strong',
         headline: `${companyInfo.display} filed annual proxy (DEF 14A) on ${latest.filed_date}`,
         company: companyInfo.display,
         company_key: tickerKey,
@@ -1385,6 +1399,7 @@ async function gatherEarningsCandidates(since) {
       const latest = filings[0];
       candidates.push({
         kind: 'earnings',
+        strength: 'weak',
         headline: `${companyInfo.display} filed 8-K on ${latest.filed_date} (likely earnings)`,
         company: companyInfo.display,
         company_key: tickerKey,
@@ -1428,6 +1443,7 @@ async function gatherInsiderCandidates(since) {
 
       candidates.push({
         kind: 'insider',
+        strength: filings.length >= 8 ? 'strong' : 'medium',
         headline: `${filings.length} insider transactions at ${companyInfo.display} this week`,
         company: companyInfo.display,
         company_key: tickerKey,
@@ -1471,6 +1487,7 @@ async function gatherAiDisclosureCandidates(since) {
     for (const row of rows.slice(0, 5)) {
       candidates.push({
         kind: 'ai_disclosure',
+        strength: 'weak',
         headline: `${row.filer_name} ${row.form_type} mentions AI`,
         company: row.filer_name,
         filing_count: 1,
@@ -1593,10 +1610,32 @@ EXAMPLES OF GOOD VS. BAD PROSE:
 
 KEY RULES:
 - For SPV trail signals: always reference the specific dominant filer family from the data and the count. Never just say "an SPV was filed."
-- For insider clusters: count matters more than dates. "5 Form 4s in 4 days from 3 different officers" is the headline.
+- For insider clusters: count matters more than dates. Reference the count and the date span. Do NOT claim filings came from the same person unless the data shows it — Form 4 filings from one company can come from different insiders.
 - For sector raises: use the dollar amount IF it's known. If undisclosed, say "amount undisclosed" — that itself is a signal (suggests bridge or recap).
 - Never use em dashes (—) inside sentences. Commas, periods, or dashes only.
 - Never claim to have READ filing contents. You can describe what filings of THIS TYPE typically signal in THIS COMPANY's situation, but don't fabricate language from inside the filing.
+
+NO FAKE STATS — THIS IS THE BIGGEST RULE:
+- NEVER invent statistics, multipliers, or comparisons to historical averages. If a stat isn't in the candidate data, don't use it.
+  - BAD: "4x the historical weekly average for this window" (Mo doesn't know the average)
+  - GOOD: "This clustering is unusual — four major proxies in 24 hours"
+  - BAD: "Insider sells of this size happen roughly twice a year"
+  - GOOD: "Six Form 4s in four days is concentrated activity"
+- NEVER attribute multiple filings to a single person or coordinated event unless the data confirms it. Six Form 4s can be six different officers. Five proxies on the same day can be coincidence + calendar.
+- NEVER claim a filing "breaks a quiet period" or "is the first in N months" unless the data shows that.
+- When you want to convey "this is unusual," use DIRECTIONAL language: "concentrated," "clustered," "unusually timed," "synchronized." Not invented numerical comparisons.
+- The honest version of pattern recognition is: describe what's visible, suggest a possible meaning, let the reader interpret. Not: assert a story as if it were measured.
+
+EXAMPLES OF SAFE VS. UNSAFE PROSE:
+
+❌ UNSAFE: "Four major tech proxies in 24 hours is roughly 4x the historical weekly average."
+✅ SAFE:   "Four major tech proxies clustered in 24 hours. The simultaneous timing suggests coordinated legal preparation for the May proxy contest deadline."
+
+❌ UNSAFE: "All six Form 4s originated from the same insider entity."
+✅ SAFE:   "Six Form 4 filings at CrowdStrike between April 20 and 23. The data shows the count and the date span, not which individuals filed — but the cadence is concentrated."
+
+❌ UNSAFE: "Netflix rarely files unscheduled 8-Ks outside of earnings or operational changes."
+✅ SAFE:   "Netflix filed an 8-K on April 23. Without seeing the filing's item codes, the timing alone is the signal — outside their typical earnings window."
 
 AFTER ALL 3 SIGNALS, write:
 
