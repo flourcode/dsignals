@@ -161,6 +161,18 @@
       color: var(--text-faint);
       margin-bottom: 4px;
     }
+    .candidate-strength {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .strength-strong { background: #E5F4E5; color: #2D5033; }
+    .strength-medium { background: #FFF4E0; color: #8B6500; }
+    .strength-weak   { background: #F0F0F5; color: #6C6880; }
     .candidate-headline {
       font-size: 14px;
       font-weight: 500;
@@ -411,7 +423,7 @@ function renderCandidates() {
     }).join('<br>');
 
     card.innerHTML = `
-      <div class="candidate-bucket">${escapeHtml((c.bucket || '').replace('_', ' '))}</div>
+      <div class="candidate-bucket">${escapeHtml((c.bucket || '').replace('_', ' '))} <span class="candidate-strength strength-${escapeHtml(c.strength || 'medium')}">${escapeHtml(c.strength || 'medium')}</span></div>
       <div class="candidate-headline">${escapeHtml(c.headline)}</div>
       <div class="candidate-samples">${samplesHtml || ''}</div>
       <div class="candidate-pick-num"></div>
