@@ -83,8 +83,18 @@
         cardEl.className = 'turn-mo-card';
         turnEl.appendChild(cardEl);
 
-        // Loading state inside the card
-        cardEl.innerHTML = `<div class="mo-loading">${FACE_WATCH}<span class="mo-loading-text">Pulling data...</span></div>`;
+        // Loading skeleton — shimmer outline matching SEC card structure
+        cardEl.innerHTML = `
+          <div class="mo-skeleton" aria-hidden="true">
+            <div class="mo-skeleton-line mo-skeleton-title"></div>
+            <div class="mo-skeleton-line mo-skeleton-sub"></div>
+            <div class="mo-skeleton-rows">
+              <div class="mo-skeleton-row"></div>
+              <div class="mo-skeleton-row"></div>
+              <div class="mo-skeleton-row"></div>
+              <div class="mo-skeleton-row mo-skeleton-row--short"></div>
+            </div>
+          </div>`;
 
         const dataResult = await fetchData(apiEndpoint, firstPass.tag);
 
@@ -252,7 +262,13 @@
     if (!text) return '';
     return text
       .split(/\n\n+/)
-      .map(para => `<p>${escapeHtml(para.trim())}</p>`)
+      .map(para => {
+        // Escape HTML first, then re-apply safe markdown: **bold** and *italic*
+        let p = escapeHtml(para.trim());
+        p = p.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        p = p.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        return `<p>${p}</p>`;
+      })
       .join('');
   }
 
@@ -315,30 +331,50 @@
 
   function summarizeCard(card) {
     if (!card) return '';
-    if (card.kind === 'forecast') {
-      const loc = card.location || {};
-      const where = loc.city ? `${loc.city}, ${loc.state}` : loc.query;
-      const periods = (card.periods || []).slice(0, 3).map(p =>
-        `${p.name}: ${p.temperature}°${p.temperature_unit}, ${p.short_forecast}`
-      ).join('; ');
-      return `Forecast for ${where}. Next periods: ${periods}.`;
-    }
-    if (card.kind === 'current' || card.kind === 'current_fallback') {
-      const loc = card.location || {};
-      const where = loc.city ? `${loc.city}, ${loc.state}` : loc.query;
-      return `Current conditions in ${where}: ${card.description || 'observed'}, temp ${card.temperature_c}°C, humidity ${card.humidity_pct}%.`;
-    }
-    if (card.kind === 'alerts') {
-      const loc = card.location || {};
-      const where = loc.city ? `${loc.city}, ${loc.state}` : loc.query;
-      const alertCount = card.alert_count || 0;
-      const events = (card.alerts || []).slice(0, 3).map(a => a.event).join(', ');
-      return `${alertCount} active alerts for ${where}: ${events}.`;
-    }
+
     if (card.kind === 'no_data') {
-      return `No data found for "${card.location_query}".`;
+      return `No data: ${card.query_summary || ''}. ${card.message || ''}`.trim();
     }
-    return JSON.stringify(card).slice(0, 500);
+
+    if (card.kind === 'company_filings') {
+      const company = card.company || 'Company';
+      const total = card.total || card.shown || 0;
+      const formType = card.filters?.form_type;
+      const dateAfter = card.filters?.date_after;
+      const rows = card.rows || [];
+
+      let summary = `${company}: ${total} filing${total === 1 ? '' : 's'}`;
+      if (formType) summary += ` (Form ${formType})`;
+      if (dateAfter) summary += ` since ${dateAfter}`;
+      summary += '.';
+
+      if (card.is_spv_trail && card.groups && card.groups.length > 0) {
+        const top = card.groups.slice(0, 3).map(g => `${g.family_name} (${g.count})`).join(', ');
+        summary += ` SPV trail active. Top filer families: ${top}.`;
+        if (card.timeline) {
+          summary += ` Date range: ${card.timeline.start} to ${card.timeline.end}.`;
+        }
+      } else {
+        const recent = rows.slice(0, 6).map(r => `${r.form_type} filed ${r.filed_date}`).join('; ');
+        if (recent) summary += ` Most recent: ${recent}.`;
+      }
+      return summary;
+    }
+
+    if (card.kind === 'filings_list') {
+      const total = card.total || 0;
+      const label = card.query_summary || 'Filings';
+      const rows = card.rows || [];
+      let summary = `${label}: ${total} filing${total === 1 ? '' : 's'}.`;
+      const top = rows.slice(0, 5).map(r =>
+        `${r.filer_name}${r.amount ? ' ($' + (r.amount / 1e6).toFixed(1) + 'M)' : ''} on ${r.filed_date}`
+      ).join('; ');
+      if (top) summary += ` Top results: ${top}.`;
+      if (card.unknown_amount_count) summary += ` ${card.unknown_amount_count} with undisclosed amount.`;
+      return summary;
+    }
+
+    return JSON.stringify(card).slice(0, 600);
   }
 
   // ──────────────────────────────────────────────────────────────────────────

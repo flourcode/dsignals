@@ -173,7 +173,7 @@
     els.modalContent.innerHTML = `
       <h2>About ${escapeHtml(displayName)}</h2>
       <p>${escapeHtml(displayName)} is a chatbot built on the Mo platform. ${escapeHtml(config.tagline || '')}</p>
-      <p>Every fact ${escapeHtml(displayName)} cites comes from <a href="${escapeAttr(dataSource.url || '#')}" target="_blank" rel="noopener">${escapeHtml(dataSource.name || 'a public data source')}</a>. If she says something specific, you can verify it.</p>
+      <p>Every fact ${escapeHtml(displayName)} cites comes from <a href="${escapeAttr(dataSource.url || '#')}" target="_blank" rel="noopener">${escapeHtml(dataSource.name || 'a public data source')}</a>. You can verify anything specific on EDGAR directly.</p>
       ${meet.name ? `<p>Feedback or just want to talk? <a href="${escapeAttr(meet.url || '#')}" target="_blank" rel="noopener">Meet ${escapeHtml(meet.name)}</a>.</p>` : ''}
       <p style="font-size: 12px; color: var(--text-faint); margin-top: 24px;">Powered by Gemini · <a href="https://github.com/" target="_blank" rel="noopener">Built on Mo</a></p>
     `;

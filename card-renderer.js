@@ -269,12 +269,16 @@
 
     // Row list: date — form — link
     const rowsHtml = rows.slice(0, 12).map(r => {
-      const amtText = r.amount ? fmtMoney(r.amount) : '';
+      // Always render the amount cell so the 4-column grid stays aligned.
+      // Empty cell for no-amount rows rather than collapsing the column.
+      const amtHtml = r.amount
+        ? `<span class="sec-row-amount">${escapeHtml(fmtMoney(r.amount))}</span>`
+        : `<span class="sec-row-amount"></span>`;
       return html`
         <a href="${escapeHtml(r.doc_link || '#')}" target="_blank" rel="noopener" class="sec-row">
           <span class="sec-row-date">${fmtDate(r.filed_date)}</span>
           <span class="sec-row-form">${r.form_type || '?'}</span>
-          ${amtText ? `<span class="sec-row-amount">${escapeHtml(amtText)}</span>` : ''}
+          ${safe(amtHtml)}
           <span class="sec-row-arrow">→</span>
         </a>
       `;

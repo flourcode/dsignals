@@ -690,6 +690,60 @@ button {
   margin: var(--s-3) 0;
 }
 
+
+/* ============================================================================
+   Loading skeleton — shimmer placeholder matching SEC card structure
+   ============================================================================ */
+
+.mo-skeleton {
+  padding: 4px 0;
+}
+
+.mo-skeleton-line {
+  background: linear-gradient(
+    90deg,
+    var(--border-soft) 25%,
+    var(--border) 50%,
+    var(--border-soft) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+@keyframes shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+.mo-skeleton-title {
+  height: 22px;
+  width: 55%;
+  margin-bottom: 8px;
+}
+
+.mo-skeleton-sub {
+  height: 13px;
+  width: 35%;
+  margin-bottom: 20px;
+}
+
+.mo-skeleton-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mo-skeleton-row {
+  height: 38px;
+  border-radius: 6px;
+  width: 100%;
+}
+
+.mo-skeleton-row--short {
+  width: 75%;
+}
+
 /* ============================================================================
    SEC EDGAR cards — Jobs/Lupton restraint
    One finding per card. Bar charts show proportionality. Every row is a link.
@@ -789,12 +843,13 @@ button {
   grid-template-columns: 110px 60px 1fr 16px;
   align-items: center;
   gap: 12px;
-  padding: 10px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border-soft);
   text-decoration: none;
   color: inherit;
   transition: opacity 120ms ease;
   font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
 }
 .sec-row:last-child { border-bottom: none; }
 .sec-row:hover { opacity: 0.65; }
@@ -919,9 +974,21 @@ button {
   .sec-headline { font-size: 19px; }
   .sec-subhead { margin-bottom: 16px; }
   .sec-bar-row { grid-template-columns: minmax(60px, 110px) 1fr 28px; gap: 8px; }
-  .sec-row { grid-template-columns: 80px 50px 1fr 14px; gap: 8px; font-size: 12px; }
-  .sec-row-tall .sec-row-filer { font-size: 13px; }
-  .sec-row-tall .sec-row-meta { font-size: 10px; }
+
+  /* Date column: 110px clips on 375px iPhone — tighten it */
+  .sec-row { grid-template-columns: 72px 50px 1fr 14px; gap: 8px; font-size: 12px; }
+  .sec-row-date { font-size: 11px; }
+
+  /* Two-line tall rows: prevent filer name from pushing meta off screen */
+  .sec-row-tall { padding: 12px 0; }
+  .sec-row-tall .sec-row-filer { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+  .sec-row-tall .sec-row-meta { font-size: 10px; white-space: normal; }
+
+  /* Pills: bump touch target to ~40px minimum */
+  .mo-pill { height: 40px; padding: 0 var(--s-4); font-size: 14px; }
+
+  /* Greeting examples: easier to tap on mobile */
+  .greeting-example { padding: 8px 14px; font-size: 14px; }
 }
 
 /* ── Sparkline timeline (SPV trail card) ──────────────────────────────── */
